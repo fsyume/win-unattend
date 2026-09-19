@@ -1,0 +1,362 @@
+# iVentoy 部署 Windows 11 无人值守 — 实施手册
+
+针对你的环境选定：**UEFI/GPT 客户端 + Windows 11 + 已有第三方 DHCP + 完整后置自动化（改名 / 加域 / 装驱动 / 装软件）**。
+
+---
+
+## 0. 方案总览
+
+整体思路：**iVentoy 只负责"把 ISO 送到机器上并回答无人值守问题"，真正带机器特征的工作（驱动、改名、加域、装软件）交给一份在首次登录时从 iVentoy 服务器 HTTP 拉取的 PowerShell 脚本。**
+
+```
+客户端加电 (UEFI PXE)
+        │
+        ├─(1) 第三方 DHCP 只发 IP；iVentoy 以 ProxyNet 模式补 next-server/bootfile
+        │
+        ├─(2) iVentoy 送 iPXE loader → 显示启动菜单
+        │      菜单超时 5s → 自动选「默认启动文件」= Windows 11 ISO
+        │
+        ├─(3) 注入包解开到 X:\  →  VentoyAutoRun.bat 自动执行
+        │      加载 X:\drivers 里的网卡驱动（否则 setup 会报"缺少驱动"）
+        │
+        ├─(4) unattend.xml 生效：擦盘 → 建 GPT 分区 → 装 WIM → 创建 deploy 账户 → 自动登录
+        │
+        └─(5) 首次登录 FirstLogonCommands：
+               HTTP 拉取 http://<iVentoy>:16000/user/deploy/deploy.ps1 并执行
+                 → 装驱动包 → 装软件 → 按序列号改名 + 加域 → 重启
+```
+
+四个「自动化开关」缺一个就会停在某处等人点：
+
+| 开关 | 位置 | 不配的后果 |
+|---|---|---|
+| 菜单默认超时时间 | 参数设置 | 卡在启动菜单 |
+| 设为默认启动文件 | 镜像管理 | 超时后走列表第 1 个 ISO |
+| 自动安装脚本 | 镜像管理 | 到分区/OOBE 全部手点 |
+| 脚本选择超时时间 | 镜像管理 | 卡在"选哪个安装脚本" |
+
+---
+
+## 1. 文件清单
+
+```
+<iVentoy 解压目录>\
+├── iso\                                 ← 放 Windows 11 ISO（可软链接）
+├── user\
+│   ├── scripts\
+│   │   └── unattend.xml                 ← 【本仓库 unattend.xml 放这里】
+│   ├── deploy\
+│   │   ├── deploy.ps1                   ← 【本仓库 user/deploy/deploy.ps1】
+│   │   ├── drivers.zip                  ← 你准备的驱动包（可选）
+│   │   └── 7z2408-x64.exe 等            ← 你准备的静默安装包（可选）
+│   └── injection\
+│       ├── VentoyAutoRun.bat            ← 【本仓库 user/injection/VentoyAutoRun.bat】
+│       └── drivers\                     ← 放网卡驱动 .inf/.sys/.cat
+```
+
+**命名铁律**（官方明确要求）：iVentoy 解压路径、`iso` 目录下的目录名和 ISO 文件名、脚本名，**都不能有中文或空格**。
+
+---
+
+## 2. 步骤一：iVentoy 服务端
+
+1. 用 **1.0.43 或更新**版本。理由：1.0.43 起"自动启动失败会回退到手动模式，页面不再整体退出"；1.0.43 还修了 wimboot 模式启动 Windows 时自动安装脚本不生效的 BUG（这正是你要用的功能）。
+2. 下载 win64（或 linux64）包，解压到**无中文无空格**的路径。
+3. ISO 放进 `iso\`。不想占空间就软链接：
+   ```
+   mklink D:\iventoy\iso\Win11.iso  E:\download\Win11_24H2_x64.iso
+   ln -s /opt/iso/Win11.iso /opt/iventoy/iso/Win11.iso
+   ```
+4. 启动：
+   - Windows：双击 exe，会自动开浏览器；也可注册为开机自启动服务（官方文档《注册 Windows 服务开机自启动》）。
+   - Linux：`sudo bash iventoy.sh start`；自启动用 `sudo bash iventoy.sh -R start`（`-R` = 按上次参数启动，前提是先手动成功启动过一次）。
+5. 浏览器用 **Chrome 或 Firefox**（官方只测了这两个），访问 `http://127.0.0.1:26000`。
+
+> 端口备忘：管理界面 **26000**、HTTP 服务 **16000**、NBD **10809**。你的 `deploy.ps1` 通过 16000 分发，防火墙上要放通。
+
+---
+
+## 3. 步骤二：和第三方 DHCP 共存（你环境的关键点）
+
+### 3.1 先确认对方的 DHCP 会不会响应 PXE 请求
+
+有些 DHCP 会直接过滤掉 PXE 阶段的请求。判定方法（官方给了两种）：
+
+- **抓包**：客户端同网段 PC 上 Wireshark 过滤 `dhcp`，能看到 DHCP Offer 就是响应了。
+- **看客户端屏幕**：
+  - 打印 `PXE-E53`、`No boot filename` 或已拿到 IP → **响应了 PXE**，需要按下面配。
+  - 长时间卡在获取 IP，最后 `PXE-E51` → **不响应 PXE**，可以当它不存在，直接用 iVentoy 内置 DHCP。
+
+### 3.2 选模式：优先 `ProxyNet`
+
+| 模式 | 适用 | 第三方 DHCP 要改什么 |
+|---|---|---|
+| **`ProxyNet`** ✅ 推荐 | iVentoy 与 DHCP **在不同机器**，同 VLAN | **什么都不用改** |
+| `Proxy` | iVentoy 与 DHCP 跑在**同一台机器** | 不用改 |
+| `External` | ProxyNet 不满足时 | 配 `next-server`=<iVentoy IP>、`bootfile`=`iventoy_loader_16000` |
+| `ExternalNet` | iVentoy 与 DHCP **跨 VLAN** | 必须能按 DHCP 报文动态下发 bootfile，要求很高 |
+
+你的情况（路由器/域控/核心交换机上的 DHCP，iVentoy 另跑一台）= **`ProxyNet`**。
+
+原理：ProxyNet 下 iVentoy 仍然起内部 DHCP，但**不发 IP**，只在 67 和 4011 端口补 `next-server`/`bootfile` 选项，所以不会和你的 DHCP 抢地址池。官方明确写"优先使用 ProxyNet 模式"。
+
+操作：`参数配置` → DHCP 服务器模式 → `ProxyNet`。此时主界面的 IP 地址池填不填都不影响客户端拿地址（地址由你的 DHCP 发）。
+
+> ⚠️ 如果交换机开了 **DHCP Snooping**，需要把 iVentoy 服务器所在端口设为 **trusted**，否则它的 ProxyDHCP 应答会被丢弃，表现为客户端拿到 IP 但拿不到 bootfile。
+
+### 3.3 备选：改用 `External` 模式
+
+如果 ProxyNet 在你的网络里不通，就走 External，此时在 DHCP 服务器上配：
+
+```
+option 066 (Next Server)  = <iVentoy 服务器 IP>
+option 067 (Bootfile Name) = iventoy_loader_16000
+```
+
+注意末尾的 `16000` 必须和 iVentoy 的 HTTP 端口一致（改了端口这里也要改）。`External` 模式下第三方 DHCP 不需要区分 BIOS/UEFI —— iVentoy 会旁听 DHCP 报文自己判断架构，然后返回正确的启动文件。
+
+Windows Server DHCP 图形界面里就是"作用域选项 → 066 启动服务器主机名 / 067 启动文件名"。**不要**在这台 DHCP 上同时保留别的 067。
+
+---
+
+## 4. 步骤三：界面配置（把四个开关打开）
+
+`参数设置` 页：
+- **菜单默认超时时间** = `5`（0 = 永不超时）
+- **DHCP 服务器模式** = `ProxyNet`
+- 勾选 **ByPass HW Check**（跳过 Win11 的 RAM/TPM/SecureBoot/CPU 检查）
+- 勾选 **ByPass NRO**（跳过联网账户要求）
+
+> ⚠️ **TPM/安全启动绕过不在 `unattend.xml` 里**。勾选框的作用是在 WinPE 里往注册表写
+> `HKLM\SYSTEM\Setup\LabConfig\BypassRAMCheck / BypassTPMCheck / BypassSecureBootCheck / BypassCPUCheck`
+> 和 `HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\OOBE\BypassNRO`。
+> 也就是说：把这份 answer file 拿去走 U 盘安装，或者忘了勾这个框，在不满足硬件要求的机器上
+> Win11 会直接停在"这台电脑不满足运行 Windows 11 的要求"。
+>
+> 另外，**本方案不依赖 `Bypass NRO`**：本地账户是通过微软有文档支持的 `UserAccounts` 元素创建的，
+> 所以即使 24H2/25H2 把 `bypassnro` 移除或改掉，装机流程也不会因此断掉。
+
+`镜像管理` 页，选中 Win11 ISO：
+- 点 **设为默认启动文件**
+- 自动安装脚本点 **新增** → 选 `unattend.xml`（位于 `user/scripts/`）
+- 设置 **默认自动脚本编号**（从 1 开始，0 = 不使用自动安装）
+- 设置 **脚本选择超时时间** 为非 0 值
+- 设置 **注入文件** = 你打包好的注入 `.7z`
+
+> 界面上的脚本路径以 UI 实际提示为准（官方示例脚本放在 `user/scripts/example` 下）。
+
+### 安全启动（如果客户端 BIOS 开着 Secure Boot）
+
+iVentoy 1.0.40+ 支持，**仅 X86_64 客户机**，三种模式：
+
+| 模式 | 优点 | 代价 |
+|---|---|---|
+| `Not Supported` | 兼容性最好 | 必须进 BIOS 关掉 Secure Boot |
+| `Standard` | 客户端零操作 | **中文菜单 / GrubBoot / UEFI 分辨率锁定 / 启动密码 全部不可用** |
+| `ByPass` | 功能齐全 | 每台机器**首次**需手动导入一次 Key |
+
+批量装机建议：**先在 BIOS 统一关掉 Secure Boot** 走 `Not Supported`（工位机通常可批量设置），或者接受一次性的 Key 导入走 `ByPass`。部分机型 BIOS 还需先使能 UEFI CA。
+
+---
+
+## 5. 步骤四：改 answer file 和脚本里的 EDIT ME
+
+### `unattend.xml`（搜索 `EDIT ME`）
+
+| 位置 | 改成 |
+|---|---|
+| `/IMAGE/NAME` 的 `Windows 11 Pro` | 你镜像里**准确的版本名**（见下方"中文 ISO 陷阱"） |
+| `AutoLogon` 的 `<Value>` | 本地管理员密码 |
+| `UserAccounts` 的 `<Value>` | 同上，两处必须一致 |
+| `FullName` / `Organization` / `RegisteredOwner` / `RegisteredOrganization` | 你的信息 |
+
+**中文 ISO 陷阱（务必看）**：非英文版 Windows 安装介质的映像 **Name 通常是本地化的**。中文版 ISO 用 `dism /Get-WimInfo` 查出来的"名称"很可能是 `Windows 11 专业版` 而不是 `Windows 11 Pro`。必须**照 dism 原样抄**。
+
+而一旦这个值含中文，`unattend.xml` 就不能再保持我交付时的纯 ASCII 形态了。二选一：
+
+- **(a)** 把 `unattend.xml` 另存为 **UTF-8 带 BOM**；
+- **(b)** 改用索引，文件名保持 ASCII：
+  ```xml
+  <Key>/IMAGE/INDEX</Key>
+  <Value>5</Value>
+  ```
+  代价是索引和具体 ISO 绑定，换 ISO 要重新确认（`dism /Get-WimInfo` 里第几个是专业版）。
+
+查准确值的命令（在有 Windows 的机器上挂载 ISO 后执行）：
+
+```cmd
+dism /Get-WimInfo /WimFile:D:\sources\install.wim
+```
+
+新镜像可能是 `install.esd`，把文件名换掉即可。
+
+**分区布局**：默认是 `EFI 300MB + MSR 16MB + Windows(占满剩余)` 三分区。
+- 为什么这样最稳：`<Extend>true</Extend>` 的分区必须**最后创建**，所以 OS 分区放最后；不建独立恢复分区，WinRE 落在 `C:\Windows` 里，也顺带避开了 Windows 11 25H2/26H2 把恢复分区切成 500MB 后累积更新报 `0x80070643` 的老问题。
+- 如果你想要独立 1GB WinRE 分区：`unattend.xml` 里有一段注释掉的备用 `<DiskConfiguration>`，整块替换，并把 `<InstallTo><PartitionID>` 从 `3` 改成 `4`。要点是恢复分区必须在**最前面**（用 `TypeID de94bba4-06d1-4d40-a16a-bfd50179d6ac`），Windows 分区才能继续 `Extend` 吃满剩余空间。
+
+**自动分区 + 自动选盘**：分区本身是 `unattend.xml` 里的 `<DiskConfiguration>` 全自动完成的（擦盘 → 建 GPT → 格式化 → 装 WIM，全程无提示）。选哪块盘由 iVentoy 变量决定，当前用的是**容量最接近 200GB 的那块盘**：
+
+```xml
+<DiskID>$$VT_WINDOWS_DISK_CLOSEST_200$$</DiskID>
+```
+
+这个变量在 `<DiskConfiguration><Disk><DiskID>` 和 `<InstallTo><DiskID>` 两处都写了，同一台客户机上两次展开结果一致，所以不会错位。
+
+可替换的三种选盘策略（官方变量表，**只能用于 Windows unattend.xml**）：
+
+| 变量 | 选中的盘 |
+|---|---|
+| `$$VT_WINDOWS_DISK_CLOSEST_200$$` | 容量最接近 200GB 的盘 ← **当前使用** |
+| `$$VT_WINDOWS_DISK_1ST_NONUSB$$` | 第一个非 USB 盘 |
+| `$$VT_WINDOWS_DISK_MAX_SIZE$$` | 容量最大的盘 |
+
+`XXX` 可以换成任意数值，比如 `$$VT_WINDOWS_DISK_CLOSEST_500$$`。**注意只能用一个，没有"或"逻辑。**
+
+> ⚠️ **两个必须知道的坑**
+>
+> **1. `_CLOSEST_` / `_MAX_SIZE` 不排除 USB 盘。** 官方变量表里只有 `_1ST_NONUSB` 明确写了"非 USB"。
+> 也就是说，如果机器上插着一块大容量 U 盘或移动固态，它参与容量比较并可能胜出，然后被**擦掉**。
+> **装机时务必拔掉所有可移动存储。**
+>
+> **2. 比较的是 Windows 报出来的容量，即 GiB 但显示成 GB。** 标称 200GB 的盘在 diskpart 里显示约 `186 GB`，
+> 标称 256GB 的约 `238 GB`。填 200 仍然能正确区分这两者（`|186-200| = 14` 比 `|238-200| = 38` 更近），
+> 所以不用把 200 改成 186。但如果你的机器上同时存在标称 200GB 和 240GB 的盘，两者都离 200 不远，
+> 建议先在一台机器上确认实际数值再决定填多少。
+>
+> **怎么确认真实数值**：注入包里那个 `VentoyAutoRun.bat` 已经会把 `list disk` 的结果写进
+> `X:\VentoyAutoRun.log`。在安装界面按 `Shift+F10` 就能看到每块盘的准确 GB 数，据此把 `_CLOSEST_XXX` 调到你要的值。
+
+**擦盘保护**：`<WillWipeDisk>true</WillWipeDisk>` 不可逆。选盘为什么不写死 `DiskID=0`——多控制器服务器上枚举顺序和你以为的不一样，写死 0 很可能擦错盘。用"最接近 200GB"这种**按属性选**的方式，换固件、换控制器、换机型都不需要改 answer file。**首次测试请物理拔掉所有数据盘。**
+
+### `deploy.ps1`（文件顶部 `$Cfg` 配置块）
+
+| 项 | 说明 |
+|---|---|
+| `NamePrefix` / `NameSource` / `SerialTail` | 命名规则，默认"PC-" + 序列号后 10 位 |
+| `JoinDomain` / `DomainName` | 是否加域、域名 |
+| `DomainJoinUser` / `DomainJoinPassword` | **专用加域账号**（见第 9 节安全） |
+| `TargetOU` | 机器对象落到哪个 OU |
+| `DriverZipName` | 驱动包文件名（放在 `user/deploy/` 下），留空跳过 |
+| `WingetIds` | 用 winget 装的软件 ID 列表 |
+| `LocalInstallers` | 本地静默安装包列表 |
+| `DisableAutoLogon` | 见下 |
+| `RebootAtEnd` | 装完是否自动重启 |
+
+**关于 `DisableAutoLogon`**：你要求保留自动登录，所以默认 `$false`。但要提醒——加域后的生产机把本地管理员密码明文留在 `Winlogon\DefaultPassword` 是一个真实的安全口子。建议评估后改成 `$true`，脚本会关闭自动登录并清除存储的密码。
+
+改名策略说明：脚本默认用 **BIOS 序列号**（按 `Add-Computer -NewName` 在**加域那一刻**应用），这样 AD 里的对象一开始就是正确的名字，不需要先加域再改名。序列号缺失或是 `To be filled by O.E.M.` 这类垃圾值时自动回退到 PXE 网卡 MAC；`unattend.xml` 里 `specialize` 阶段的 `PC-DEPLOYING` 只是占位名。
+
+> 为什么不直接在 `unattend.xml` 里用 `$$VT_MAC_COLON_UPPER$$` 命名？因为 Windows 计算机名不允许 `:` 且最长 15 字符，iVentoy 没有能直接拼出合法名字的变量。
+
+---
+
+## 6. 步骤五：制作注入包（防"缺少驱动"）
+
+这是 PXE 装 Windows **第一大失败原因**，务必做。
+
+iVentoy 通过 PXE 启动后，要在 WinPE 里用**网卡驱动**把服务器上的 ISO 挂成本地盘再跑 `setup.exe`。`boot.wim` 里没有你这台机器网卡的驱动，就会弹"缺少计算机所需的介质驱动程序"——**那不是缺硬盘驱动，是缺网卡驱动 + 挂不到 ISO 源**。
+
+三个动作一起做，形成双保险：
+
+1. **注入包**：把 `user/injection/` 里的内容（`VentoyAutoRun.bat` + `drivers\`）打包成**一个** `.7z`，在 `镜像管理` 里设为该 ISO 的**注入文件**。
+   - `VentoyAutoRun.bat` 会在 `winpeshl.exe` 之前自动执行，做两件事：用 `drvload` + `pnputil` 把 `X:\drivers` 里的驱动装进当前 WinPE；把 `ipconfig /all`、网卡 PnP 列表、`list disk` 全部写进 `X:\VentoyAutoRun.log`（iVentoy 也会捕获这个日志）。
+   - **`drivers\` 目录即使为空也必须保留在压缩包里**，因为 `unattend.xml` 里有一段 `Microsoft-Windows-PnpCustomizationsWinPE` 指向 `X:\drivers`，Windows Setup 会按这个路径加载驱动。如果你确定不做注入，就把那段组件整段删掉。
+2. **收集驱动**：Intel 网卡驱动完整包、Broadcom NetXtreme、Mellanox WinOF-2、Realtek `rt640x64.inf`、Marvell/Aquantia `aqnic`。服务器和笔记本的网卡型号差异很大，建议一次收全。`drivers\README.txt` 里列了对照。
+3. **验证**：真出问题时按 `Shift+F10` 调出 cmd：
+   ```
+   ipconfig /all
+   ```
+   - 看不到 MAC 与 iVentoy 页面对应的网卡 → **就是缺网卡驱动**，回到第 1、2 步。
+   - 能看到网卡但仍报错 → `type X:\Windows\System32\ventoy\vtoype.log`，把日志发给作者。
+
+---
+
+## 7. 步骤六：单机验证（**必做，不要直接批量**）
+
+找一台和量产机同型号的机器，物理断开其他硬盘：
+
+1. 确认 BIOS：**UEFI 模式、CSH/Legacy 关闭**、Secure Boot 按第 4 节决定开或关。
+2. 客户端设 PXE 启动，观察：
+   - 拿到 IP → 出现 iVentoy 菜单 → 5 秒后自动进入 Win11 ISO。
+   - 菜单没自动走 → 菜单超时没设或设成了 0。
+   - 出现"选自动安装脚本"界面停住 → 脚本选择超时时间还是 0。
+3. 进入分区阶段应**无提示直接开始**。若弹出分区界面 → `unattend.xml` 没被识别，检查是否放对目录、是否设成默认脚本。
+   - 若在分区阶段报 answer file 解析失败：优先怀疑 `$$VT_...$$` 没有被替换。iVentoy 只在**被当作自动安装脚本**处理的文件上做变量扩展，所以这通常意味着路径/默认脚本编号没配对，而不是变量语法写错了。注意 HTTP 直接下 `user/scripts/unattend.xml` 拿到的是**未展开**的原文，不能用来验证。
+4. 装完应自动登录进桌面，然后会自动重启一次（`deploy.ps1` 结尾）。
+5. 验收清单：
+
+| 检查项 | 命令 / 位置 |
+|---|---|
+| 分区是 GPT + EFI + MSR | 磁盘管理，或 `diskpart` → `list partition` |
+| 系统语言/区域是中文 | 设置 → 时间和语言 |
+| 计算机名符合规则 | `hostname` |
+| 已加域且在正确 OU | `systeminfo \| findstr /i domain`，AD 用户和计算机 |
+| 驱动装上了 | 设备管理器无黄色感叹号，`pnputil /enum-drivers` |
+| 软件装上了 | 按你配置的 winget/安装包核对 |
+| 脚本执行日志 | `C:\Windows\Temp\deploy.log` 和 `deploy-transcript.log` |
+| 完成标记 | 注册表 `HKLM\SOFTWARE\ITDeploy` |
+| WinPE 注入日志 | `X:\VentoyAutoRun.log`（在安装界面按 Shift+F10 看） |
+
+6. 单机跑通后，**再**逐步放开并发。注意免费版上限。
+
+---
+
+## 8. 步骤七：批量与授权
+
+- **免费版最多 20 个客户端**：判定依据是 iVentoy 主界面 `设备列表` 里的设备数量，到达 20 后不再服务新客户端。绕过方式只有"关掉 iVentoy 重开 + 换一批 IP 池"。**商用被禁止**，批量生产环境要买专业版。
+- **专业版 299 元**（大版本一次性，1.x 周期内有效）：客户端数量无限制、可商用。License 绑定**服务端母机**机器码（一个 License 最多 2 个机器码，绑定后不可解绑），客户机数量不受限。建议先用免费版把流程跑通再绑机器码。
+- 并发时 iVentoy 是单台服务器同时供 ISO / HTTP / SMB，网卡和磁盘 IO 是瓶颈；建议装机的机器和 iVentoy 服务器之间走千兆以上、别跨 WAN。
+
+---
+
+## 9. 安全注意事项（务必看）
+
+这套方案里有两个凭据会**以明文经过网络**：
+
+1. `unattend.xml` 里的本地管理员密码 —— 明文写在文件里，且 iVentoy 的 HTTP 服务把 `user/` 目录直接对外开放（`http://<IP>:16000/user/...`），同网段任何人 `curl` 就能拿到。
+2. `deploy.ps1` 里的加域账号密码 —— 同样明文、同样可被下载。
+
+缓解措施：
+
+- **专用加域账号**：只授予目标 OU 上"将工作站加入域"的委派权限，绝不用 Domain Admin。
+- **装机期间隔离**：把 PXE 装机放在独立 VLAN / 临时交换机上进行，装完拔线。
+- **装机完成即改密**：`deploy.ps1` 跑完后轮换这两个密码；`DisableAutoLogon = $true` 可同时清掉注册表里存的明文密码。
+- 加域环节更彻底的做法是**离线加域**（`djoin` 生成 blob，用 unattend 的 `Microsoft-Windows-UnattendedJoin` 走离线加域），完全不传凭据，代价是每台机器要先预生成 blob。
+- iVentoy 管理界面 26000 端口不要暴露到非装机网段。
+
+---
+
+## 10. 排错速查表
+
+| 现象 | 原因 / 处理 |
+|---|---|
+| 客户端卡在获取 IP，最后 `PXE-E51` | 第三方 DHCP 不响应 PXE → 改用 iVentoy 内置 DHCP；或交换机 DHCP Snooping 拦了 ProxyDHCP（端口设 trusted） |
+| 拿到 IP 但 `PXE-E53 / No boot filename` | DHCP 响应了 PXE 但没给 bootfile → 切到 `ProxyNet`（或 `External` 并配 066/067） |
+| 客户端直接挂死 | 送错了架构的启动文件 → 用 `ProxyNet`/`External` 让 iVentoy 自己判断；`ExternalNet` 下检查 bootfile 的 `_bios`/`_uefi` 后缀 |
+| 启动菜单停住不自动走 | 菜单默认超时时间 = 0 |
+| 停在"选择自动安装脚本" | 脚本选择超时时间 = 0 |
+| 分区界面弹出来了 | `unattend.xml` 没生效：路径/默认脚本编号/是否放在 `user/scripts` |
+| 报"缺少计算机所需的介质驱动程序" | **网卡驱动**问题 → 见第 6 节，`Shift+F10` + `ipconfig /all` 确认 |
+| 装到一半卡住、报无法应用映像 | 分区布局与固件不匹配（UEFI 用了 MBR 布局），或 `INSTALL/NAME` 版本名写错 |
+| 装到错误的盘 / 擦错盘 | 别写死 `DiskID=0`；`_CLOSEST_`/`_MAX_SIZE` **不排除 USB 盘**，装机拔掉所有可移动存储；首次测试物理拔掉数据盘 |
+| 自动登录后脚本没跑 | 看 `C:\Windows\Temp\deploy.log`；多为 16000 端口不通或 `user/deploy/deploy.ps1` 路径不对 |
+| 脚本报权限不足 | FirstLogonCommands 没提权 → 改用 `specialize` 阶段 `Microsoft-Windows-Deployment\RunSynchronous`（以 SYSTEM 运行） |
+| 加域失败：对象已存在 | 重装同名机器需先在 AD 里清理同名计算机对象（`Add-Computer` 没有 `-Force`） |
+| UEFI 启动 Windows 花屏 | 1.0.25 已修，用最新版；菜单里也可设分辨率 |
+| 安全启动过不去 | 见第 4 节三种模式；个别机型要先使能 BIOS 的 UEFI CA |
+| 改动不生效 | iVentoy 修改配置后需重新"刷新镜像列表"；改脚本后确认没有旧副本 |
+
+---
+
+## 11. 参考（官方文档）
+
+- [iVentoy 使用说明](https://www.iventoy.com/cn/doc_start.html)
+- [操作系统全自动安装](https://www.iventoy.com/cn/doc_unattend_install.html)
+- [自动安装脚本 / 变量扩展](https://www.iventoy.com/cn/doc_autoinstall.html)
+- [配合第三方 DHCP Server](https://www.iventoy.com/cn/doc_ext_dhcp.html) ｜ [确认外部 DHCP 支持 PXE](https://www.iventoy.com/cn/doc_ext_dhcp_resp.html)
+- [HTTP 路径说明](https://www.iventoy.com/cn/doc_http_url.html)
+- [文件注入](https://www.iventoy.com/cn/doc_injection.html) ｜ [VentoyAutoRun.bat](https://www.iventoy.com/cn/doc_inject_autorun.html)
+- [启动 Windows 时缺少驱动错误](https://www.iventoy.com/cn/doc_win_driver.html)
+- [安全启动支持说明](https://www.iventoy.com/cn/sboot.html)
+- [Windows 11 ByPass 说明](https://www.iventoy.com/cn/doc_win11_bypass.html)
+- [关于 WinPE](https://www.iventoy.com/cn/doc_winpe.html) ｜ [版本说明（免费/专业）](https://www.iventoy.com/cn/doc_edition.html)

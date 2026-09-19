@@ -1,0 +1,23 @@
+# --- large binaries: keep driver packs and ISO images out of git ---
+*.7z
+*.zip
+*.iso
+*.wim
+*.esd
+*.exe
+*.msi
+
+# --- secrets: never commit these ---
+# Put real credentials in a local override file or edit $Cfg and DO NOT commit it.
+secrets/
+*.secret
+*.local.ps1
+deploy.local.ps1
+iventoy.lic
+
+# --- OS / editor noise ---
+Thumbs.db
+desktop.ini
+.DS_Store
+*.swp
+*~
