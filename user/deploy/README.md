@@ -41,26 +41,25 @@ C:\tool\Drvceo_Win10_Win11_x64_Lite\start.bat
 - 想连界面都不出现（真静默），在 `Drvceo.ini` 的 `[DrvCeoSet]` 节加 `Silence=on`。
   注意 `Drvceo.ini` 官方要求 **ANSI 编码**。
 
-## ⚠️ 清单里只允许 ASCII 路径
+## 清单里只允许 ASCII 路径
 
 **cmd.exe 按系统 OEM 代码页解析清单**，路径里一旦有中文或空格，客户端会生成
 **乱码文件名**，或者干脆下载失败。所以清单里只保留匹配 `^[A-Za-z0-9._/\-]+$` 的路径。
 
-当前 `tool` 文件夹里有 **2 个文件不符合**，已从清单中排除：
+> 注意：iVentoy 的 HTTP 服务**本身是支持中文路径的**（实测 `%E5%B9%B3...` 这类
+> 百分号编码返回 206）。所以障碍不在服务端，而在**客户端的 cmd**——要让它创建中文
+> 文件名，清单就得存成 GBK 编码，等于把"编码问题"从消除变成管理。
+> 上一次因为编码问题（`%date%` + 中文注释）已经翻过车，所以这里选择**统一改成 ASCII 名字**。
 
-| 文件 | 问题 |
+**当前 `tool` 里所有文件都已是 ASCII，清单共 114 项。** 之前有两个文件不符合，已改名：
+
+| 原名 | 新名 |
 |---|---|
-| `QI-ANXING Tianqing(10.7.0.2704平衡防御版).exe` | 空格 + 中文 + 括号（418 MB，别漏了） |
-| `wiztree_4_33_portable\locale\How to Translate WizTree.txt` | 空格 |
+| `QI-ANXING Tianqing(10.7.0.2704平衡防御版).exe` | `QiAnXing-Tianqing-10.7.0.2704.exe` |
+| `wiztree_4_33_portable\locale\How to Translate WizTree.txt` | `wiztree_4_33_portable\locale\How_to_Translate_WizTree.txt` |
 
-**推荐处理方式：改成 ASCII 名字，然后重新生成清单。** 在 `tool` 目录下执行：
-
-```powershell
-Rename-Item "QI-ANXING Tianqing(10.7.0.2704平衡防御版).exe" "QiAnXing-Tianqing-10.7.0.2704.exe"
-Rename-Item "wiztree_4_33_portable\locale\How to Translate WizTree.txt" "How_to_Translate_WizTree.txt"
-```
-
-改完再按下一节重新生成清单，就会变成 114 个文件。
+**以后再往里放东西时，文件名请直接用 ASCII**（字母、数字、`.`、`_`、`-`），
+否则它不会进清单，也就不会被传到客户机上。
 
 ## 什么时候必须重新生成清单
 
@@ -86,9 +85,9 @@ Get-ChildItem -Recurse -File |
 
 | 项 | 值 |
 |---|---|
-| 清单当前内容 | 112 个文件，约 599 MB |
+| 清单当前内容 | 114 个文件，约 999 MB |
 | 客户端目标目录 | `C:\tool\` |
-| 未包含 | 上面那 2 个非 ASCII 文件（418 MB 的奇安信就在其中） |
+| 未包含 | 无，114 个文件全部包含 |
 
 这些全部在**局域网**内传输。首次登录时这段下载发生在**桌面出现之前**，
 所以机器会在"正在准备桌面"停一会儿，属正常现象。
