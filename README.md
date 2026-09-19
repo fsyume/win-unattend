@@ -312,6 +312,38 @@ dism /Get-WimInfo /WimFile:D:\sources\install.wim
 
 **擦盘保护**：`<WillWipeDisk>true</WillWipeDisk>` 不可逆。选盘为什么不写死 `DiskID=0`——多控制器服务器上枚举顺序和你以为的不一样，写死 0 很可能擦错盘。用"最接近 200GB"这种**按属性选**的方式，换固件、换控制器、换机型都不需要改 answer file。**首次测试请物理拔掉所有数据盘。**
 
+### ⚠️ 改完 `unattend.xml` 必须重启 iVentoy
+
+**iVentoy 把自动安装脚本的内容缓存在内存里，只在服务启动时读一次。**
+之后你在磁盘上怎么改它都不看——文件是新的，下发出去的却是旧的。
+
+**这个坑的可怕之处是它不报错**：装机一切正常，只是脚本里的改动完全没生效。
+
+**实证**（客户端自己上传回来的 `ventoy.log`）：
+
+```
+[2026/09/20 00:34:31] SaveBuffer2File <ventoy\autoinstall_1> len:21290
+```
+
+磁盘上的文件是 `25353` 字节、客户端却收到 `21290` 字节——后者正是改动前的大小。
+
+**正确做法**：
+
+1. 改完 `<iVentoy>\user\scripts\unattend.xml`
+2. **重启 iVentoy**（关掉 `iVentoy_64.exe` 再启动）
+   - 或者在 `镜像管理` 里把该脚本**删除**再**重新新增**，并把默认编号/超时设回去
+3. 客户端重新 PXE 引导
+
+**怎么确认下发的是哪一版**（不用进虚拟机）：
+客户端每次引导后会把日志回传到 `<iVentoy>\log\client\<客户端IP>.zip`，
+解开看 `client_info\ventoy.log` 里的这一行：
+
+```
+SaveBuffer2File <ventoy\autoinstall_1> len:<字节数>
+```
+
+**`<字节数>` 必须等于你磁盘上 `unattend.xml` 的大小。**
+
 ### 5.2 为什么直接用内置 Administrator（文档依据）
 
 本方案不创建自建账户，直接启用并使用内置 Administrator。这不是猜的，微软文档写得很明确：
@@ -619,6 +651,7 @@ ipconfig /all
 | **装完没弹出驱动总裁** | 看 `C:\Windows\Temp\install-drivers.log`。没这个文件说明第 1 条命令就没跑起来 → 检查 iVentoy 的 16000 端口通不通、`user\deploy\` 下有没有 `install-drivers.cmd` |
 | 驱动脚本报下载失败 | `<iVentoy>\user\deploy\` 下缺 `DrvCeoSetup.exe`，或文件名不是这个（URL 写死了）。用浏览器打开那个 URL 可直接验证 |
 | 驱动总裁装不出驱动 | 它需要**公网**。客户机只通局域网时它会失败——先确认客户机能不能上外网 |
+| **改了 `unattend.xml` 但客户端行为完全没变** | **iVentoy 把脚本内容缓存在内存里**，只在服务启动时读一次。改完文件**必须重启 iVentoy**（或在界面里删除脚本再重新新增），否则客户端拿到的还是旧内容。这是本项目踩过最深的坑，见 5.1 节末尾 |
 | **停在「产品密钥」页** | ① `UserData` 里缺 `ProductKey`（它才是唯一能跳过密钥页的元素）；② 或密钥与镜像版本对不上，例如拿专业版密钥配 China Only 镜像。见 5.1 节 |
 | **装出来的版本不是专业版** | 用了 `/IMAGE/INDEX` 且索引写错。多版本 ISO 上索引 1 是**家庭版**，专业版是 4。改用 `/IMAGE/NAME` 可避免静默装错 |
 | 卡在「选择要安装的版本」页 | `/IMAGE/NAME` 和镜像里的 Name 不匹配，Setup 回退到交互式选择。用 `dism /Get-WimInfo` 照抄准确的 Name |
