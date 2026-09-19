@@ -42,8 +42,13 @@
 > `<iVentoy>\log\client\<客户端IP>.zip`，解压看 `client_info\ventoy.log` 里
 > `len:` 的数字，**必须等于你磁盘上 `unattend.xml` 的字节数**。
 >
-> ⚠️ **不要用服务端 `log\log.txt` 判断客户端有没有请求过文件**——iVentoy
-> **只记失败的 `user/` 请求（404），成功的下载一条都不记**。"日志里没有"推不出"客户端没请求"。
+> ⚠️ **不要用服务端 `log\log.txt` 判断客户端有没有请求过 `user/` 下的文件**——iVentoy
+> **只记 `user/` 下失败的请求（404），成功的下载一条都不记**。"日志里没有"推不出"客户端没请求"。
+>
+> 唯一的例外是 `/viso/` 的 `200 HEAD`（ISO 请求），它**是**会记的，而且有用：
+> `200 HEAD /viso/id/2/mac:.../auto:1` 能证明客户端确实带着自动脚本 #1 请求了那张 ISO。
+> 实测确认：`log\log.txt` 里 37 条 404 中唯一一条 `user/` 记录是 `</user/deploy/deploy.ps1>`
+> （后置脚本删除后的历史痕迹），而所有 `200` 都是 `/viso/...`，没有任何 `/user/` 成功记录。
 
 ---
 
@@ -87,12 +92,19 @@ iso\                                  ← 放 Windows 11 ISO（可软链接）
 
 **命名铁律**（官方要求）：iVentoy 解压路径、`iso` 目录名与 ISO 文件名、脚本名，**都不能有中文或空格**。
 
-`iso\` 里另外两个文件与本方案无关：
+`iso\` 里现在只有两张，与本方案相关的只有第一张：
 
 | 文件 | 说明 |
 |---|---|
-| `Win11_25H2_Pro_Chinese_Simplified_x64_v2.iso` | **已弃用**。China Only 专供版（`EDITIONID=ProfessionalCountrySpecific`），没有公开通用密钥，`NAME` 也不是 `Windows 11 Pro`，正是当初卡住的根因 |
-| `FirPE-V1.9.2.iso` | PE 维护盘 |
+| `zh-cn_...consumer...25h2....iso` | **在用**（见上表） |
+| `FirPE-V1.9.2.iso` | PE 维护盘，与 Windows 无人值守无关 |
+
+另有一张 `Win11_25H2_Pro_Chinese_Simplified_x64_v2.iso`（China Only 专供版，
+`EDITIONID=ProfessionalCountrySpecific`，没有公开通用密钥、`NAME` 也不是 `Windows 11 Pro`，
+正是当初卡住的根因）——**已从 `iso\` 删除**。它的教训见「镜像选择」一节，不要再放回来。
+
+> 增删 ISO 后镜像 id 会变：日志里能看到它还在时是 `ID:2 size:8280907776`，删除后 consumer ISO
+> 的 id 由 3 变成 2。所以别把镜像 id 记死，以刷新后的实际编号为准。
 
 ---
 

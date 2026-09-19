@@ -54,7 +54,8 @@ iVentoy 无人值守部署 Windows 11 的**文档 + 配置仓库**：没有代�
 - 不要把 `DiskID` 写死成 `0`；`_CLOSEST_` / `_MAX_SIZE` 变量**不排除 USB 盘**。
 - 不要往 `tool\` 或清单里引入中文/空格文件名——要支持就得把清单存成 GBK，
   等于把编码问题从"消除"变成"管理"。
-- 不要用服务端 `log\log.txt` 判断客户端是否请求过文件（它**只记 404**，成功的下载一条不记）。
+- 不要用服务端 `log\log.txt` 判断客户端是否请求过 `user/` 下的文件（那里**只记 404**，成功的下载一条不记）。
+  例外：`/viso/` 的 `200 HEAD`（ISO 请求）会记，且能当证据用（`auto:1` 表示带着自动脚本 #1 请求了 ISO）。
 - 不要提交二进制或真实凭据；`.gitignore` 已排除，别用 `-f` 绕过。
 - `root123` 是**故意保留**的实验密码（用户已明确表示无所谓）。不要"顺手"改掉它，也不必为它提安全修复。
 - `deploy.ps1` / `VentoyAutoRun.bat` 在 `git 948160a` 里，是**故意**从当前范围移除的。不要自行恢复。
@@ -83,9 +84,23 @@ wc -c unattend.xml                  # 应为 25589（改了就要同步改 READM
 grep -c "" user/deploy/tool_files.txt   # 应为 114
 ```
 
-**做不到的**：`tool\` 和 ISO 不在仓库里，所以"清单与真实文件是否一一对应"、"装机流程是否还跑得通"
-**都无法在本地验证**，只能真机/虚拟机跑一轮（README「单机验收」一节）。
-需要这类结论时，明确告诉用户"这需要一次装机验证"，**不要凭推断声称已验证**。
+**做不到的**：`tool\` 和 ISO 不在仓库里，**装机流程是否还跑得通**无法在此验证，
+只能真机/虚拟机跑一轮（README「单机验收」一节）。需要这类结论时，明确告诉用户
+"这需要一次装机验证"，**不要凭推断声称已验证**。
+
+清单与真实文件是否对应**是可以验的**，前提是能看见 iVentoy 目录（WSL 下即 `/mnt/c/...`）：
+
+```sh
+cd "<iVentoy>/user/deploy"
+find tool -type f | sed 's|^tool/||' | LC_ALL=C sort > /tmp/a
+tr -d '\r' < tool_files.txt | LC_ALL=C sort > /tmp/b
+comm -3 /tmp/a /tmp/b          # 无输出 = 完全一致（2026-09-20 实测：114 = 114，零差异）
+du -sh tool                    # 应为 ~999 MB
+sha256sum tool_files.txt install-drivers.cmd ../scripts/unattend.xml
+```
+
+顺带能核的两件事：ISO 的实际大小、以及客户端回传日志 `log/client/<ip>.zip` 里的 `len:`
+是否等于磁盘上 `unattend.xml` 的字节数。
 
 ## 提交风格
 
