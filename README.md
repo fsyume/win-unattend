@@ -16,8 +16,8 @@
         ├─(2) iVentoy 送 iPXE loader → 显示启动菜单
         │      菜单超时 5s → 自动选「默认启动文件」= Windows 11 ISO
         │
-        ├─(3) 注入包解开到 X:\  →  VentoyAutoRun.bat 自动执行
-        │      加载 X:\drivers 里的网卡驱动（否则 setup 会报"缺少驱动"）
+        ├─(3) 依赖 ISO 内 boot.wim 自带的网卡驱动把 ISO 挂成本地盘
+        │      （不做文件注入；万一真机报"缺少驱动"，见第 6 节补救）
         │
         ├─(4) unattend.xml 生效：擦盘 → 建 GPT 分区 → 装 WIM → 创建 deploy 账户 → 自动登录
         │
@@ -49,9 +49,9 @@
 │   │   ├── deploy.ps1                   ← 【本仓库 user/deploy/deploy.ps1】
 │   │   ├── drivers.zip                  ← 你准备的驱动包（可选）
 │   │   └── 7z2408-x64.exe 等            ← 你准备的静默安装包（可选）
-│   └── injection\
-│       ├── VentoyAutoRun.bat            ← 【本仓库 user/injection/VentoyAutoRun.bat】
-│       └── drivers\                     ← 放网卡驱动 .inf/.sys/.cat
+│   └── injection\                       ← 当前方案**不使用**，仅作缺驱动时的补救备用
+│       ├── VentoyAutoRun.bat
+│       └── drivers\
 ```
 
 **命名铁律**（官方明确要求）：iVentoy 解压路径、`iso` 目录下的目录名和 ISO 文件名、脚本名，**都不能有中文或空格**。
@@ -141,7 +141,7 @@ Windows Server DHCP 图形界面里就是"作用域选项 → 066 启动服务�
 - 自动安装脚本点 **新增** → 选 `unattend.xml`（位于 `user/scripts/`）
 - 设置 **默认自动脚本编号**（从 1 开始，0 = 不使用自动安装）
 - 设置 **脚本选择超时时间** 为非 0 值
-- 设置 **注入文件** = 你打包好的注入 `.7z`
+- ~~设置 **注入文件**~~ —— 当前方案不做文件注入，这一项**留空**
 
 > 界面上的脚本路径以 UI 实际提示为准（官方示例脚本放在 `user/scripts/example` 下）。
 
@@ -223,8 +223,18 @@ dism /Get-WimInfo /WimFile:D:\sources\install.wim
 > 所以不用把 200 改成 186。但如果你的机器上同时存在标称 200GB 和 240GB 的盘，两者都离 200 不远，
 > 建议先在一台机器上确认实际数值再决定填多少。
 >
-> **怎么确认真实数值**：注入包里那个 `VentoyAutoRun.bat` 已经会把 `list disk` 的结果写进
-> `X:\VentoyAutoRun.log`。在安装界面按 `Shift+F10` 就能看到每块盘的准确 GB 数，据此把 `_CLOSEST_XXX` 调到你要的值。
+> **怎么确认真实数值**：本方案不做文件注入，所以没有 `X:\VentoyAutoRun.log` 可看。
+> 直接看 iVentoy 主界面的**设备列表**（会显示每台客户端的磁盘信息），或者最快的方式——
+> 在 Windows 安装界面按 `Shift+F10` 调出 cmd，敲：
+>
+> ```
+> diskpart
+> list disk
+> exit
+> ```
+>
+> 每块盘的准确 GB 数和磁盘号一目了然，据此把 `_CLOSEST_XXX` 调到你要的值。
+> 建议在第一台真机上把这一步固化进验收流程。
 
 **擦盘保护**：`<WillWipeDisk>true</WillWipeDisk>` 不可逆。选盘为什么不写死 `DiskID=0`——多控制器服务器上枚举顺序和你以为的不一样，写死 0 很可能擦错盘。用"最接近 200GB"这种**按属性选**的方式，换固件、换控制器、换机型都不需要改 answer file。**首次测试请物理拔掉所有数据盘。**
 
@@ -250,24 +260,58 @@ dism /Get-WimInfo /WimFile:D:\sources\install.wim
 
 ---
 
-## 6. 步骤五：制作注入包（防"缺少驱动"）
+## 6. 步骤五：缺驱动的补救方案（**当前不做，备用**）
 
-这是 PXE 装 Windows **第一大失败原因**，务必做。
+> **当前方案已明确不使用文件注入**：`unattend.xml` 里没有 `Microsoft-Windows-PnpCustomizationsWinPE` 组件，
+> iVentoy 界面的「注入文件」也留空。装机完全依赖 ISO 内 `boot.wim` 自带的网卡驱动。
+>
+> 本节保留为**逃生路线**：真机万一撞上"缺少驱动"，照这里做即可恢复，不需要重新设计流程。
+
+### 6.1 为什么会有这个报错
 
 iVentoy 通过 PXE 启动后，要在 WinPE 里用**网卡驱动**把服务器上的 ISO 挂成本地盘再跑 `setup.exe`。`boot.wim` 里没有你这台机器网卡的驱动，就会弹"缺少计算机所需的介质驱动程序"——**那不是缺硬盘驱动，是缺网卡驱动 + 挂不到 ISO 源**。
 
-三个动作一起做，形成双保险：
+⚠️ **在 Hyper-V 上测不出这个问题**：Hyper-V 虚拟网卡的驱动是 `boot.wim` 自带的，无论做不做注入都能装成功。**必须上真机才能验证**，而且不同机型的网卡型号差异很大。
 
-1. **注入包**：把 `user/injection/` 里的内容（`VentoyAutoRun.bat` + `drivers\`）打包成**一个** `.7z`，在 `镜像管理` 里设为该 ISO 的**注入文件**。
-   - `VentoyAutoRun.bat` 会在 `winpeshl.exe` 之前自动执行，做两件事：用 `drvload` + `pnputil` 把 `X:\drivers` 里的驱动装进当前 WinPE；把 `ipconfig /all`、网卡 PnP 列表、`list disk` 全部写进 `X:\VentoyAutoRun.log`（iVentoy 也会捕获这个日志）。
-   - **`drivers\` 目录即使为空也必须保留在压缩包里**，因为 `unattend.xml` 里有一段 `Microsoft-Windows-PnpCustomizationsWinPE` 指向 `X:\drivers`，Windows Setup 会按这个路径加载驱动。如果你确定不做注入，就把那段组件整段删掉。
-2. **收集驱动**：Intel 网卡驱动完整包、Broadcom NetXtreme、Mellanox WinOF-2、Realtek `rt640x64.inf`、Marvell/Aquantia `aqnic`。服务器和笔记本的网卡型号差异很大，建议一次收全。`drivers\README.txt` 里列了对照。
-3. **验证**：真出问题时按 `Shift+F10` 调出 cmd：
+### 6.2 万一撞上了，三步恢复
+
+1. **把组件加回 `unattend.xml`**（放在 `windowsPE` 阶段、`Microsoft-Windows-Setup` 之前）：
+
+   ```xml
+   <component name="Microsoft-Windows-PnpCustomizationsWinPE"
+              processorArchitecture="amd64"
+              publicKeyToken="31bf3856ad364e35"
+              language="neutral"
+              versionScope="nonSxS"
+              xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State"
+              xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+     <DriverPaths>
+       <PathAndCredentials wcm:action="add" wcm:keyValue="1">
+         <Path>X:\drivers</Path>
+       </PathAndCredentials>
+     </DriverPaths>
+   </component>
    ```
-   ipconfig /all
-   ```
-   - 看不到 MAC 与 iVentoy 页面对应的网卡 → **就是缺网卡驱动**，回到第 1、2 步。
-   - 能看到网卡但仍报错 → `type X:\Windows\System32\ventoy\vtoype.log`，把日志发给作者。
+
+2. **打注入包**：把 `user/injection/` 里的内容（`VentoyAutoRun.bat` + `drivers\`）打包成**一个** `.7z`，
+   在 `镜像管理` 里设为该 ISO 的**注入文件**。`drivers\` **即使为空也要留在压缩包里**——路径必须存在。
+   - `VentoyAutoRun.bat` 会在 `winpeshl.exe` 之前自动执行：用 `drvload` + `pnputil` 把 `X:\drivers`
+     里的驱动装进当前 WinPE，并把 `ipconfig /all`、网卡 PnP 列表、`list disk` 写进 `X:\VentoyAutoRun.log`。
+
+3. **收集驱动**（要解压成 `.inf` 结构，不是厂商的 `.exe` 安装包）：
+   Intel 网卡驱动完整包、Broadcom NetXtreme、Mellanox WinOF-2、Realtek `rt640x64.inf`、
+   Marvell/Aquantia `aqnic`。服务器和笔记本差异很大，建议一次收全，`drivers/README.txt` 里列了对照。
+
+### 6.3 现场定位这个报错
+
+按 `Shift+F10` 调出 cmd：
+
+```
+ipconfig /all
+```
+
+- 看不到 MAC 与 iVentoy 页面对应的网卡 → **就是缺网卡驱动**，回到 6.2。
+- 能看到网卡但仍报错 → `type X:\Windows\System32\ventoy\vtoype.log`，把日志发给作者。
 
 ---
 
@@ -295,7 +339,7 @@ iVentoy 通过 PXE 启动后，要在 WinPE 里用**网卡驱动**把服务器�
 | 软件装上了 | 按你配置的 winget/安装包核对 |
 | 脚本执行日志 | `C:\Windows\Temp\deploy.log` 和 `deploy-transcript.log` |
 | 完成标记 | 注册表 `HKLM\SOFTWARE\ITDeploy` |
-| WinPE 注入日志 | `X:\VentoyAutoRun.log`（在安装界面按 Shift+F10 看） |
+| WinPE 注入日志 | 本方案不做注入，无此项。需要看磁盘/网卡时可 `Shift+F10` 手动敲 `diskpart` → `list disk`、`ipconfig /all` |
 
 6. 单机跑通后，**再**逐步放开并发。注意免费版上限。
 
@@ -336,7 +380,7 @@ iVentoy 通过 PXE 启动后，要在 WinPE 里用**网卡驱动**把服务器�
 | 启动菜单停住不自动走 | 菜单默认超时时间 = 0 |
 | 停在"选择自动安装脚本" | 脚本选择超时时间 = 0 |
 | 分区界面弹出来了 | `unattend.xml` 没生效：路径/默认脚本编号/是否放在 `user/scripts` |
-| 报"缺少计算机所需的介质驱动程序" | **网卡驱动**问题 → 见第 6 节，`Shift+F10` + `ipconfig /all` 确认 |
+| 报"缺少计算机所需的介质驱动程序" | **网卡驱动**问题（Hyper-V 测不出来，只有真机会遇到）→ 见第 6 节补救：`Shift+F10` + `ipconfig /all` 确认 |
 | 装到一半卡住、报无法应用映像 | 分区布局与固件不匹配（UEFI 用了 MBR 布局），或 `INSTALL/NAME` 版本名写错 |
 | 装到错误的盘 / 擦错盘 | 别写死 `DiskID=0`；`_CLOSEST_`/`_MAX_SIZE` **不排除 USB 盘**，装机拔掉所有可移动存储；首次测试物理拔掉数据盘 |
 | 自动登录后脚本没跑 | 看 `C:\Windows\Temp\deploy.log`；多为 16000 端口不通或 `user/deploy/deploy.ps1` 路径不对 |

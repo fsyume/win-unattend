@@ -66,29 +66,18 @@
     </component>
 
     <!--
-      NIC DRIVERS FOR SETUP ITSELF.
-      This is the fix for the "missing driver" error dialog. iVentoy must mount
-      the ISO over the network using the NIC driver shipped inside the ISO's
-      boot.wim; if that driver is missing, Setup cannot find its install source.
+      No Microsoft-Windows-PnpCustomizationsWinPE component here, on purpose:
+      this deployment relies on the NIC drivers already present in the ISO's
+      boot.wim and does not use iVentoy file injection.
 
-      X:\drivers comes from the iVentoy "File Injection" archive, which is
-      unpacked into X:\ of this WinPE before winpeshl.exe runs.
-      => Make sure your injection archive ALWAYS contains an (even empty)
-         "drivers" folder, otherwise remove this whole component.
+      IF a machine ever stops with "A media driver your computer needs is
+      missing", that error is NOT a missing disk driver. It means boot.wim has
+      no driver for that machine's NIC, so iVentoy cannot mount the ISO over
+      the network and Setup cannot find its install source. The fix is to add
+      this component back with <Path>X:\drivers</Path> and to ship the vendor
+      NIC drivers through an iVentoy injection archive - see the
+      "missing driver" section of README.md.
     -->
-    <component name="Microsoft-Windows-PnpCustomizationsWinPE"
-               processorArchitecture="amd64"
-               publicKeyToken="31bf3856ad364e35"
-               language="neutral"
-               versionScope="nonSxS"
-               xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State"
-               xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
-      <DriverPaths>
-        <PathAndCredentials wcm:action="add" wcm:keyValue="1">
-          <Path>X:\drivers</Path>
-        </PathAndCredentials>
-      </DriverPaths>
-    </component>
 
     <component name="Microsoft-Windows-Setup"
                processorArchitecture="amd64"
