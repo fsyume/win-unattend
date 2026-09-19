@@ -1,4 +1,4 @@
-# --- large binaries: keep driver packs and ISO images out of git ---
+# --- 大体积二进制文件：驱动包和 ISO 镜像不要进 git ---
 *.7z
 *.zip
 *.iso
@@ -7,15 +7,15 @@
 *.exe
 *.msi
 
-# --- secrets: never commit these ---
-# Put real credentials in a local override file or edit $Cfg and DO NOT commit it.
+# --- 机密：绝对不要提交 ---
+# 真实凭据请放在本地覆盖文件里，或者改完 $Cfg 后不要提交该文件。
 secrets/
 *.secret
 *.local.ps1
 deploy.local.ps1
 iventoy.lic
 
-# --- OS / editor noise ---
+# --- 系统 / 编辑器产生的杂项 ---
 Thumbs.db
 desktop.ini
 .DS_Store

@@ -1,52 +1,50 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <!--
   ============================================================================
-  iVentoy unattended answer file for Windows 11  (UEFI / GPT)
+  iVentoy Windows 11 无人值守 answer file（UEFI / GPT）
   ============================================================================
-  Place this file in:   <iVentoy>\user\scripts\unattend.xml
-  Then in iVentoy UI  -> Image Management -> select the Win11 ISO
-                      -> Auto Install Script: add this file, set it as default
-                      -> set "Script Select Timeout" to a non-zero value
+  放置位置：<iVentoy 解压目录>\user\scripts\unattend.xml
+  然后在 iVentoy 界面里：镜像管理 -> 选中 Win11 的 ISO
+                      -> 自动安装脚本：新增本文件并设为默认
+                      -> 脚本选择超时时间设为非 0 值
 
-  iVentoy expands $$VT_xxx$$ variables inside auto-install scripts.
-  Verified variables used here:
-    $$VT_WINDOWS_DISK_CLOSEST_200$$  -> Windows disk number of the disk whose
-                                        capacity is closest to 200 GB.
-                                        Alternatives for the same slot:
-                                          _1ST_NONUSB   first non-USB disk
-                                          _MAX_SIZE     largest disk
-                                          _CLOSEST_<n>  closest to n GB
-    $$VT_SERVER_IP$$                -> iVentoy server IP
-    $$VT_HTTP_PORT$$                -> iVentoy HTTP port (default 16000)
-    $$VT_MAC_DASH_UPPER$$           -> PXE NIC MAC, e.g. 11-22-33-AA-BB-CC
+  【编码要求】本文件含中文注释，必须保存为 UTF-8 with BOM。
+  不要另存为 ANSI / GBK，否则 Windows Setup 会报
+  "Windows 无法分析或处理无人参与应答文件"。
+  用 VS Code 打开时右下角应显示 "UTF-8 with BOM"。
 
-  KEEP THIS FILE ASCII-ONLY. Non-ASCII characters plus a missing BOM is the
-  classic cause of "Windows could not parse or process the unattend answer
-  file". All Chinese documentation lives in README.md instead.
+  iVentoy 会对自动安装脚本里的 $$VT_xxx$$ 变量做替换。
+  本文件用到的变量（已核对官方变量表）：
+    $$VT_WINDOWS_DISK_CLOSEST_200$$  -> 容量最接近 200GB 的那块盘的 Windows 磁盘号。
+                                        同一位置也可换成：
+                                          _1ST_NONUSB   第一个非 USB 盘
+                                          _MAX_SIZE     容量最大的盘
+                                          _CLOSEST_<n>  最接近 n GB 的盘
+    $$VT_SERVER_IP$$                -> iVentoy 服务器 IP
+    $$VT_HTTP_PORT$$                -> iVentoy HTTP 端口（默认 16000）
+    $$VT_MAC_DASH_UPPER$$           -> 客户端 PXE 网卡 MAC，形如 11-22-33-AA-BB-CC
 
-  THINGS YOU MUST EDIT BEFORE USE (search for "EDIT ME"):
-    1. /IMAGE/NAME          -> exact edition name in your install.wim
-                               (localised on non-English media - see the
-                                LOCALISED MEDIA WARNING further down)
-    2. Local admin password (2 places: AutoLogon + UserAccounts)
+  使用前必须修改的地方（在文件里搜索 "EDIT ME"）：
+    1. /IMAGE/NAME          -> install.wim 里的准确版本名
+                               （非英文版介质上是本地化的，见下方「本地化介质警告」）
+    2. 本地管理员密码（两处：AutoLogon 与 UserAccounts，必须完全一致）
     3. RegisteredOwner / RegisteredOrganization
 
-  WINDOWS 11 SPECIFICS - THESE ARE NOT HANDLED BY THIS FILE:
-    * TPM 2.0 / Secure Boot / RAM / CPU requirement checks are bypassed by the
-      iVentoy UI checkbox "ByPass HW Check" (it writes the
-      HKLM\SYSTEM\Setup\LabConfig\Bypass*Check registry values in WinPE).
-      Installing Windows 11 on ineligible hardware WITHOUT iVentoy, or with
-      that checkbox unchecked, will stop at "This PC can't run Windows 11".
-    * Skipping the Microsoft-account requirement is the "ByPass NRO" checkbox.
-      This file does NOT depend on it: the local account below is created
-      through the documented UserAccounts element, so the flow keeps working
-      on builds where bypassnro is removed.
-    * Windows 11 will not install to MBR/Legacy, hence the UEFI/GPT layout.
+  Windows 11 专属事项（这些不由此文件负责）：
+    * TPM 2.0 / 安全启动 / 内存 / CPU 检查，由 iVentoy 界面上的
+      "ByPass HW Check" 勾选框绕过（它在 WinPE 里写
+      HKLM\SYSTEM\Setup\LabConfig\Bypass*Check 系列注册表值）。
+      不走 iVentoy、或忘了勾这个框，在不满足硬件要求的机器上装 Win11
+      会停在「这台电脑不满足运行 Windows 11 的要求」。
+    * 跳过微软账户要求是 "ByPass NRO" 勾选框。本文件不依赖它：
+      下面的本地账户是通过微软有文档支持的 UserAccounts 元素创建的，
+      所以即使某些版本移除了 bypassnro，装机流程依然可用。
+    * Windows 11 不接受安装到 MBR/Legacy，因此这里是 UEFI/GPT 布局。
   ============================================================================
 -->
 <unattend xmlns="urn:schemas-microsoft-com:unattend">
 
-  <!-- ======================= PASS 1: windowsPE ========================= -->
+  <!-- ======================= 阶段 1：windowsPE ========================= -->
   <settings pass="windowsPE">
 
     <component name="Microsoft-Windows-International-Core-WinPE"
@@ -66,17 +64,14 @@
     </component>
 
     <!--
-      No Microsoft-Windows-PnpCustomizationsWinPE component here, on purpose:
-      this deployment relies on the NIC drivers already present in the ISO's
-      boot.wim and does not use iVentoy file injection.
+      这里故意没有 Microsoft-Windows-PnpCustomizationsWinPE 组件：
+      本方案依赖 ISO 内 boot.wim 自带的网卡驱动，不使用 iVentoy 文件注入。
 
-      IF a machine ever stops with "A media driver your computer needs is
-      missing", that error is NOT a missing disk driver. It means boot.wim has
-      no driver for that machine's NIC, so iVentoy cannot mount the ISO over
-      the network and Setup cannot find its install source. The fix is to add
-      this component back with <Path>X:\drivers</Path> and to ship the vendor
-      NIC drivers through an iVentoy injection archive - see the
-      "missing driver" section of README.md.
+      如果某台机器停在「缺少计算机所需的介质驱动程序」，那个报错不是缺硬盘驱动，
+      而是 boot.wim 里没有这台机器网卡的驱动，导致 iVentoy 无法通过网络把 ISO
+      挂成本地盘，Setup 也就找不到安装源。
+      补救办法：把该组件加回来（<Path>X:\drivers</Path>），并通过 iVentoy 的注入包
+      把厂商网卡驱动送进去，详见 README.md 的「缺驱动的补救方案」一节。
     -->
 
     <component name="Microsoft-Windows-Setup"
@@ -106,7 +101,7 @@
             </CreatePartition>
           </CreatePartitions>
           <ModifyPartitions>
-            <!-- Partition 1: EFI system partition, must be FAT32 -->
+            <!-- 分区 1：EFI 系统分区，必须是 FAT32 -->
             <ModifyPartition wcm:action="add">
               <Order>1</Order>
               <PartitionID>1</PartitionID>
@@ -114,9 +109,9 @@
               <Format>FAT32</Format>
             </ModifyPartition>
             <!--
-              Partition 2 (MSR) is intentionally NOT modified/formatted.
-              Adding it here is a common cause of a Setup failure.
-              Partition 3 is the OS volume.
+              分区 2（MSR）故意不在这里修改或格式化，
+              把它写进来是导致 Setup 失败的常见原因。
+              分区 3 才是系统所在卷。
             -->
             <ModifyPartition wcm:action="add">
               <Order>2</Order>
@@ -127,30 +122,29 @@
             </ModifyPartition>
           </ModifyPartitions>
           <!--
-            *** DESTRUCTIVE ***
-            Target disk = the one whose capacity is closest to 200 GB.
+            ★★★ 会清空数据 ★★★
+            目标盘 = 容量最接近 200GB 的那块盘。
 
-            Why not hardcode 0: on machines with several controllers the
-            enumeration order is not what you expect, and you would wipe the
-            wrong disk.
+            为什么不写死 0：多控制器机器上的枚举顺序和你想的不一样，
+            写死 0 很可能擦错盘。
 
-            Why closest-to-N instead of "first non-USB": it selects by a
-            property that is stable across firmware and controller changes,
-            so the same answer file works on a mixed fleet.
+            为什么用「最接近 N」而不是「第一个非 USB 盘」：它按容量这种
+            不随固件和控制器变化的属性来选，同一份 answer file 可以通用于
+            混装机型。
 
-            WATCH OUT: _CLOSEST_ / _MAX_SIZE only rank by capacity. They do
-            NOT exclude USB disks the way _1ST_NONUSB does. A large USB stick
-            or USB SSD left plugged in can win the comparison and get wiped.
-            Unplug all removable storage before imaging.
+            注意：_CLOSEST_ / _MAX_SIZE 只按容量排序，不像 _1ST_NONUSB 那样
+            排除 USB 盘。插着的大容量 U 盘或移动固态可能在比较中胜出，
+            然后被擦掉。装机前务必拔掉所有可移动存储。
 
-            The match is against the capacity Windows reports, which is GiB
-            shown as "GB": a drive sold as 200 GB shows up as ~186 GB, one
-            sold as 256 GB as ~238 GB. 200 still ranks them correctly
-            (|186-200| = 14 beats |238-200| = 38).
+            比较的是 Windows 报出来的容量，单位是 GiB 但显示成 GB：
+            标称 200GB 的盘显示约 186GB，标称 256GB 的约 238GB。
+            填 200 仍然能正确区分（|186-200| = 14 比 |238-200| = 38 更近）。
 
-            Confirm the real numbers on your first test machine - the injected
-            VentoyAutoRun.bat already dumps "list disk" into X:\VentoyAutoRun.log,
-            so you can read the exact GB value and set it here.
+            在第一台真机上务必确认实际数值：在安装界面按 Shift+F10 调出 cmd，执行
+                diskpart
+                list disk
+                exit
+            即可看到每块盘的准确 GB 数和磁盘号，据此把 _CLOSEST_XXX 调到你要的值。
           -->
           <DiskID>$$VT_WINDOWS_DISK_CLOSEST_200$$</DiskID>
           <WillWipeDisk>true</WillWipeDisk>
@@ -159,34 +153,37 @@
       </DiskConfiguration>
 
       <!--
-        OPTIONAL: dedicated 1 GB WinRE partition, GPT recovery type GUID.
-        Windows 11 25H2/26H2 shrinks the recovery partition to ~500 MB and
-        later cumulative updates then fail with 0x80070643. This layout creates
-        it up front at 1000 MB. Note the ordering rule: the partition that uses
-        <Extend>true</Extend> must be created LAST, which is why Recovery is
-        partition 1 here, not partition 4.
+        可选方案：独立的 1GB WinRE 恢复分区，使用 GPT 恢复分区类型 GUID。
+        Windows 11 25H2/26H2 会把恢复分区切到约 500MB，之后累积更新会以
+        0x80070643 失败。这个布局一开始就给它 1000MB。
+        注意排序规则：使用 <Extend>true</Extend> 的分区必须最后创建，
+        这就是为什么这里 Recovery 是分区 1，而不是分区 4。
 
-        To use it, replace the whole <DiskConfiguration> block above with this
-        one and change <InstallTo><PartitionID> below from 3 to 4.
+        要启用的话，把上面整个 <DiskConfiguration> 块替换成下面这块，
+        并把下面 <InstallTo> 里的 <PartitionID> 从 3 改成 4。
 
         <DiskConfiguration>
           <Disk wcm:action="add">
             <CreatePartitions>
+              ; 分区 1：WinRE 恢复分区，1000MB
               <CreatePartition wcm:action="add">
                 <Order>1</Order>
                 <Size>1000</Size>
                 <Type>Primary</Type>
               </CreatePartition>
+              ; 分区 2：EFI 系统分区，300MB
               <CreatePartition wcm:action="add">
                 <Order>2</Order>
                 <Size>300</Size>
                 <Type>EFI</Type>
               </CreatePartition>
+              ; 分区 3：MSR 保留分区，16MB
               <CreatePartition wcm:action="add">
                 <Order>3</Order>
                 <Size>16</Size>
                 <Type>MSR</Type>
               </CreatePartition>
+              ; 分区 4：系统分区，吃掉剩余全部空间
               <CreatePartition wcm:action="add">
                 <Order>4</Order>
                 <Extend>true</Extend>
@@ -194,6 +191,7 @@
               </CreatePartition>
             </CreatePartitions>
             <ModifyPartitions>
+              ; TypeID 是微软官方的恢复分区 GUID，写错一个字符就会退化成普通数据盘
               <ModifyPartition wcm:action="add">
                 <Order>1</Order>
                 <PartitionID>1</PartitionID>
@@ -226,25 +224,24 @@
         <OSImage>
           <InstallFrom>
             <!--
-              EDIT ME: exact edition name. List them on a running Windows with
+              EDIT ME：安装的版本名。在一台可用的 Windows 上执行下面的命令列出所有版本：
                   dism /Get-WimInfo /WimFile:D:\sources\install.wim
-              (use install.esd instead of install.wim for newer media)
+              （较新的介质的文件名可能是 install.esd，替换即可）
 
-              *** LOCALISED MEDIA WARNING ***
-              On non-English Windows media the image Name is usually localised.
-              A zh-CN ISO typically reports "Windows 11 Pro" as
-              "Windows 11 Zhuan Ye Ban" in Chinese characters. You MUST copy the
-              Name exactly as dism prints it.
+              ★★★ 本地化介质警告 ★★★
+              非英文版 Windows 介质上的映像 Name 通常是本地化的。
+              中文版 ISO 用 dism 查出来往往不是 "Windows 11 Pro"，而是中文的
+              「Windows 11 专业版」。必须原样照抄 dism 打印出来的 Name。
 
-              If that string contains non-ASCII characters, this file can no
-              longer stay pure ASCII. Then do ONE of these:
-                (a) re-save this file as UTF-8 *with* BOM, or
-                (b) switch to /IMAGE/INDEX and keep the file ASCII:
-                      <Key>/IMAGE/INDEX</Key><Value>5</Value>
-                    (the index depends on the media, so pin the ISO you deploy)
+              本文件已经是 UTF-8 with BOM，所以可以直接填中文版本名，
+              只要你的编辑器保存时没有把 BOM 丢掉。
 
-              Using /IMAGE/NAME instead of /IMAGE/INDEX means re-releasing the
-              ISO with the editions in a different order will not break you.
+              另一种选择是改用索引，避免中文：
+                    <Key>/IMAGE/INDEX</Key><Value>5</Value>
+              代价是索引和具体 ISO 绑定，换 ISO 就要重新确认。
+
+              用 /IMAGE/NAME 而不是 /IMAGE/INDEX 的好处是：
+              ISO 重新发布时若版本顺序变了，不会把你打挂。
             -->
             <MetaData wcm:action="add">
               <Key>/IMAGE/NAME</Key>
@@ -253,8 +250,8 @@
           </InstallFrom>
           <InstallTo>
             <DiskID>$$VT_WINDOWS_DISK_CLOSEST_200$$</DiskID>
-            <!-- Must match the OS partition created above (3 = simple layout,
-                 4 = layout with the dedicated WinRE partition) -->
+            <!-- 必须和上面创建的 OS 分区一致
+                 （3 = 三分区简单布局，4 = 带独立 WinRE 分区的布局） -->
             <PartitionID>3</PartitionID>
           </InstallTo>
           <WillShowUI>OnError</WillShowUI>
@@ -263,14 +260,14 @@
 
       <UserData>
         <AcceptEula>true</AcceptEula>
-        <!-- EDIT ME -->
+        <!-- EDIT ME：改成你的信息 -->
         <FullName>IT</FullName>
         <Organization>YourCompany</Organization>
         <!--
-          No ProductKey on purpose: embedding one in a file that iVentoy serves
-          over plain HTTP would leak it to the whole LAN.
-          If you use KMS/ADBA activation, add a generic KMS client key here
-          instead of a real MAK:
+          这里故意不写 ProductKey：本文件由 iVentoy 通过明文 HTTP 提供，
+          把密钥写进去等于对整个局域网公开。
+          如果用 KMS/ADBA 激活，可以在这里填微软公开的 KMS 客户端通用密钥，
+          但不要填真实的 MAK：
             <ProductKey>
               <Key>W269N-WFGWX-YVC9B-4J6C9-T83GX</Key>
               <WillShowUI>OnError</WillShowUI>
@@ -280,7 +277,7 @@
     </component>
   </settings>
 
-  <!-- ======================= PASS 2: specialize ======================== -->
+  <!-- ======================= 阶段 2：specialize ======================== -->
   <settings pass="specialize">
     <component name="Microsoft-Windows-International-Core"
                processorArchitecture="amd64"
@@ -303,23 +300,22 @@
                xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State"
                xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
       <!--
-        Deliberately a throwaway name. The real name is derived from the
-        service tag / MAC by deploy.ps1 at first logon, and applied together
-        with the domain join (Add-Computer -NewName) so the AD object is
-        created with the correct name from the start.
+        这里故意写一个临时名字。真正的名字由 deploy.ps1 在首次登录时
+        根据序列号 / MAC 生成，并在加域时通过 Add-Computer -NewName 一起应用，
+        这样 AD 里的计算机对象一开始就是正确的名字。
 
-        Do NOT try to build the name here from $$VT_MAC_COLON_UPPER$$:
-        a Windows computer name may not contain ':' and is limited to 15 chars.
+        不要在这里用 $$VT_MAC_COLON_UPPER$$ 拼名字：
+        Windows 计算机名不允许包含 ":"，且最长 15 个字符。
       -->
       <ComputerName>PC-DEPLOYING</ComputerName>
-      <!-- EDIT ME -->
+      <!-- EDIT ME：改成你的信息 -->
       <RegisteredOrganization>YourCompany</RegisteredOrganization>
       <RegisteredOwner>IT</RegisteredOwner>
       <TimeZone>China Standard Time</TimeZone>
     </component>
   </settings>
 
-  <!-- ====================== PASS 3: oobeSystem ========================= -->
+  <!-- ====================== 阶段 3：oobeSystem ========================= -->
   <settings pass="oobeSystem">
     <component name="Microsoft-Windows-International-Core"
                processorArchitecture="amd64"
@@ -343,13 +339,13 @@
                xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
 
       <!--
-        LogonCount 3 (not the default 1) is required because deploy.ps1
-        reboots the machine at the end of the run; without it the second boot
-        would stop at the lock screen and the remaining steps would never run.
+        这里用 LogonCount 3（默认是 1），因为 deploy.ps1 在结尾会重启机器；
+        如果不加大，第二次开机就会停在锁屏，后面的步骤永远不会执行。
+        如果加域或其他环节导致重启次数更多，把 3 调大即可。
       -->
       <AutoLogon>
         <Password>
-          <!-- EDIT ME (must match the LocalAccount password below) -->
+          <!-- EDIT ME：必须和下面 LocalAccount 的密码完全一致 -->
           <Value>ChangeMe!2024</Value>
           <PlainText>true</PlainText>
         </Password>
@@ -359,17 +355,15 @@
       </AutoLogon>
 
       <!--
-        This is the bridge between Windows Setup and the iVentoy server.
+        这里是 Windows Setup 与 iVentoy 服务器之间的桥梁。
 
-        The answer file is static, but the machine-specific work (driver pack,
-        software, serial-based rename, domain join) is not. iVentoy serves its
-        own "user" directory over HTTP, so the script is pulled at first logon
-        from:
-            http://<iVentoy IP>:16000/user/deploy/deploy.ps1
+        answer file 是静态的，但带机器特征的工作（驱动包、软件、
+        按序列号改名、加域）不是。iVentoy 会通过 HTTP 提供自己的 user 目录，
+        因此脚本在首次登录时从下面的地址拉取：
+            http://<iVentoy 服务器 IP>:16000/user/deploy/deploy.ps1
 
-        Lives in the answer file as a single line on purpose: FirstLogonCommands
-        runs commands verbatim through cmd.exe, so no line continuation.
-        '&' must be escaped as &amp; because this is XML.
+        之所以写成一行：FirstLogonCommands 是通过 cmd.exe 原样执行的，
+        不能换行续行。'&' 在 XML 里必须转义成 &amp;。
       -->
       <FirstLogonCommands>
         <SynchronousCommand wcm:action="add">
@@ -394,7 +388,7 @@
         <LocalAccounts>
           <LocalAccount wcm:action="add">
             <Password>
-              <!-- EDIT ME (must match AutoLogon above) -->
+              <!-- EDIT ME：必须和上面 AutoLogon 的密码完全一致 -->
               <Value>ChangeMe!2024</Value>
               <PlainText>true</PlainText>
             </Password>

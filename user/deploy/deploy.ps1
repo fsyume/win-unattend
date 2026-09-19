@@ -1,90 +1,93 @@
-<#
+﻿<#
     ============================================================================
-    iVentoy Windows 11 unattended deployment - post-install script
+    iVentoy Windows 11 无人值守部署：首次登录后置脚本
     ============================================================================
-    Runs at first logon, started by the FirstLogonCommands hook in
-    unattend.xml. It is downloaded over HTTP from the iVentoy server, because
-    an answer file cannot carry a payload and iVentoy does not inject files
-    into the installed OS.
+    由 unattend.xml 里的 FirstLogonCommands 钩子在首次登录时启动。
+    之所以通过 HTTP 从 iVentoy 服务器拉取：answer file 装不下负载，
+    而 iVentoy 也不会往装好的系统里注入文件。
 
-    Deploy to:  <iVentoy>\user\deploy\deploy.ps1
-    Served as:  http://<iVentoy-IP>:16000/user/deploy/deploy.ps1
+    【编码要求】本文件含中文注释，必须保存为 UTF-8 with BOM。
+    Windows PowerShell 5.1 只有在检测到 BOM 时才按 UTF-8 解析，
+    否则中文会乱码（注释乱码通常无害，但不要依赖这一点）。
 
-    Ordered as:
-        1. guard against re-run
-        2. wait until the iVentoy server answers
-        3. drop a marker so an admin can see what happened
-        4. install driver pack
-        5. install software (winget + local silent installers)
-        6. rename + join domain in one operation
-        7. optionally close the auto-logon back door
-        8. reboot
+    部署位置：<iVentoy 解压目录>\user\deploy\deploy.ps1
+    访问地址：http://<iVentoy 服务器 IP>:16000/user/deploy/deploy.ps1
 
-    Everything is logged to C:\Windows\Temp\deploy.log
+    执行顺序：
+        1. 防重入检查
+        2. 等待 iVentoy 服务器可连通
+        3. 写完成标记，便于管理员事后查看
+        4. 安装驱动包
+        5. 安装软件（winget + 本地静默安装包）
+        6. 改名与加域一步完成
+        7. 可选：关闭自动登录这个后门
+        8. 重启
+
+    全部日志写入 C:\Windows\Temp\deploy.log
     ============================================================================
 #>
 [CmdletBinding()]
 param(
-    # PXE NIC MAC, expanded from $$VT_MAC_DASH_UPPER$$ by iVentoy (11-22-33-AA-BB-CC)
+    # 客户端 PXE 网卡 MAC，由 iVentoy 展开 $$VT_MAC_DASH_UPPER$$ 传入（11-22-33-AA-BB-CC）
     [string]$PxeMac = '',
-    # iVentoy server IP, expanded from $$VT_SERVER_IP$$
+    # iVentoy 服务器 IP，由 $$VT_SERVER_IP$$ 展开
     [string]$ServerIp = '',
-    # iVentoy HTTP port, expanded from $$VT_HTTP_PORT$$
+    # iVentoy HTTP 端口，由 $$VT_HTTP_PORT$$ 展开
     [string]$ServerPort = '16000'
 )
 
-#region ----------------------------- CONFIG ---------------------------------
-# Everything an admin normally needs to touch lives in this block.
+#region ----------------------------- 配置区 ---------------------------------
+# 管理员通常需要改的东西都在这个块里。
 $Cfg = @{
 
-    # ---------- computer naming ----------
-    NamePrefix   = 'PC-'      # Windows name limit is 15 chars, so keep it short
-    NameSource   = 'Serial'   # 'Serial' = BIOS service tag, 'Mac' = PXE NIC MAC
-    SerialTail   = 10         # keep the last N chars of the sanitised serial
-    FallbackToMac = $true     # if the serial is missing or junk, use the MAC
+    # ---------- 计算机命名 ----------
+    NamePrefix   = 'PC-'      # Windows 计算机名最长 15 字符，前缀别太长
+    NameSource   = 'Serial'   # 'Serial' 用 BIOS 序列号，'Mac' 用 PXE 网卡 MAC
+    SerialTail   = 10         # 清洗后取序列号的最后 N 位
+    FallbackToMac = $true     # 序列号缺失或是垃圾值时，回退用 MAC
 
-    # ---------- domain join ----------
+    # ---------- 加域 ----------
     JoinDomain         = $true
     DomainName         = 'corp.example.com'
-    # Use a dedicated account that ONLY has "join computers to the domain"
-    # delegated on the target OU. Never use a Domain Admin here: this file is
-    # served over plain HTTP and readable by anyone on the deployment VLAN.
+    # 用专用账号，只在目标 OU 上委派"将计算机加入域"这一项权限。
+    # 千万不要用 Domain Admin：本文件通过明文 HTTP 提供，
+    # 装机 VLAN 上任何人都能读到。
     DomainJoinUser     = 'svc-joindeploy@corp.example.com'
     DomainJoinPassword = 'CHANGE-ME'
     TargetOU           = 'OU=Workstations,OU=Computers,DC=corp,DC=example,DC=com'
 
-    # ---------- drivers ----------
-    # Zip that contains a plain folder tree of .inf drivers.
-    # Placed in <iVentoy>\user\deploy\ ; leave empty to skip.
+    # ---------- 驱动 ----------
+    # 一个压缩包，里面是普通的 .inf 驱动目录树。
+    # 放在 <iVentoy>\user\deploy\ 下；留空则跳过驱动安装。
     DriverZipName = 'drivers.zip'
 
-    # ---------- software: winget ----------
+    # ---------- 软件：winget ----------
     WingetIds = @(
         # 'Microsoft.PowerToys'
         # 'Mozilla.Firefox'
         # '7zip.7zip'
     )
 
-    # ---------- software: local silent installers ----------
-    # Files placed in <iVentoy>\user\deploy\
+    # ---------- 软件：本地静默安装包 ----------
+    # 文件放在 <iVentoy>\user\deploy\ 下
     LocalInstallers = @(
         # @{ File = '7z2408-x64.exe'; Args = '/S' }
         # @{ File = 'vcredist_x64.exe'; Args = '/install /quiet /norestart' }
     )
 
-    # ---------- finishing ----------
-    # $false keeps the auto-logon enabled as requested.
-    # $true is the safer production default: it removes the stored local admin
-    # password from the registry once the machine is domain joined.
+    # ---------- 收尾 ----------
+    # $false = 按你的要求保留自动登录。
+    # $true = 生产环境更安全的做法：机器加域后，关掉自动登录并清除
+    #         注册表里明文存储的本地管理员密码。
     DisableAutoLogon = $false
     RebootAtEnd      = $true
 }
 
 $LogFile = 'C:\Windows\Temp\deploy.log'
 $RegRoot = 'HKLM:\SOFTWARE\ITDeploy'
-#endregion ------------------------------------------------------------------
+#endregion ----------------------------------------------------------------
 
-#region ----------------------------- HELPERS --------------------------------
+#region ----------------------------- 辅助函数 ------------------------------
 function Write-Log {
     param(
         [Parameter(Mandatory)][string]$Message,
@@ -150,7 +153,7 @@ function Get-TargetName {
         }
         if ($serial) {
             $clean = ($serial -replace '[^0-9A-Za-z]', '').ToUpper()
-            # Junk values that generic OEM firmware reports instead of a real tag
+            # 通用 OEM 固件不填真实序列号时给出的垃圾值
             $junk = @('', 'TOBEFILLEDBYOEM', 'SYSTEMSERIALNUMBER', 'NONE', 'NOTSPECIFIED',
                       'DEFAULTSTRING', '0', '0123456789', 'INVALID')
             if ($clean -and ($junk -notcontains $clean) -and $clean.Length -ge 4) {
@@ -177,9 +180,9 @@ function Get-TargetName {
     $name = $name.TrimEnd('-')
     return $name
 }
-#endregion ------------------------------------------------------------------
+#endregion ----------------------------------------------------------------
 
-#region ------------------------------ MAIN -----------------------------------
+#region ------------------------------ 主流程 ---------------------------------
 Write-Log '================ deploy.ps1 start ================'
 Write-Log ("PxeMac=$PxeMac ServerIp=$ServerIp ServerPort=$ServerPort")
 
@@ -189,7 +192,7 @@ if (-not (Test-IsAdmin)) {
     return
 }
 
-# idempotence guard - FirstLogonCommands can fire again on a later auto-logon
+# 防重入：后续的自动登录可能再次触发 FirstLogonCommands
 if (Get-ItemProperty -Path $RegRoot -Name Done -ErrorAction SilentlyContinue) {
     Write-Log 'Marker found, this machine was already deployed. Nothing to do.'
     return
@@ -203,7 +206,7 @@ $BaseUrl = 'http://{0}:{1}' -f $ServerIp, $ServerPort
 
 try { Start-Transcript -Path 'C:\Windows\Temp\deploy-transcript.log' -Force | Out-Null } catch { }
 
-# --- 1. wait for the deployment server -------------------------------------
+# --- 1. 等待部署服务器可连通 -----------------------------------------------
 if (-not (Test-TcpPort -ComputerName $ServerIp -Port ([int]$ServerPort))) {
     Write-Log "waiting up to 5 minutes for $ServerIp`:$ServerPort ..."
     $deadline = (Get-Date).AddMinutes(5)
@@ -216,7 +219,7 @@ $serverUp = Test-TcpPort -ComputerName $ServerIp -Port ([int]$ServerPort)
 if ($serverUp) { Write-Log "iVentoy server $ServerIp`:$ServerPort is reachable" }
 else { Write-Log 'iVentoy server is NOT reachable, continuing with local-only steps' 'WARN' }
 
-# --- 2. drivers -------------------------------------------------------------
+# --- 2. 驱动 ---------------------------------------------------------------
 if ($Cfg.DriverZipName -and $serverUp) {
     $zip = Join-Path 'C:\Windows\Temp' $Cfg.DriverZipName
     $url = '{0}/user/deploy/{1}' -f $BaseUrl, $Cfg.DriverZipName
@@ -241,7 +244,7 @@ if ($Cfg.DriverZipName -and $serverUp) {
     Write-Log 'skipping drivers: server unreachable' 'WARN'
 }
 
-# --- 3. software: winget ----------------------------------------------------
+# --- 3. 软件：winget -------------------------------------------------------
 if ($Cfg.WingetIds.Count -gt 0) {
     if (Get-Command winget.exe -ErrorAction SilentlyContinue) {
         foreach ($id in $Cfg.WingetIds) {
@@ -260,7 +263,7 @@ if ($Cfg.WingetIds.Count -gt 0) {
     }
 }
 
-# --- 4. software: local silent installers -----------------------------------
+# --- 4. 软件：本地静默安装包 -----------------------------------------------
 foreach ($pkg in $Cfg.LocalInstallers) {
     if (-not $serverUp) { Write-Log "skipping $($pkg.File): server unreachable" 'WARN'; continue }
     $dest = Join-Path 'C:\Windows\Temp' $pkg.File
@@ -276,7 +279,7 @@ foreach ($pkg in $Cfg.LocalInstallers) {
     }
 }
 
-# --- 5. rename + join domain ------------------------------------------------
+# --- 5. 改名 + 加域 --------------------------------------------------------
 $cs = Get-CimInstance -ClassName Win32_ComputerSystem
 $targetName = Get-TargetName -Source $Cfg.NameSource -Mac $PxeMac `
     -Prefix $Cfg.NamePrefix -SerialTail $Cfg.SerialTail -FallbackToMac $Cfg.FallbackToMac
@@ -298,7 +301,7 @@ if ($Cfg.JoinDomain) {
             $p = @{
                 DomainName = $Cfg.DomainName
                 Credential = $cred
-                NewName    = $targetName      # name is applied at join time
+                NewName    = $targetName      # 名字在加入域的这一刻生效
                 Restart    = $false
                 ErrorAction = 'Stop'
             }
@@ -322,7 +325,7 @@ if ($Cfg.JoinDomain) {
     }
 }
 
-# --- 6. close the auto-logon back door --------------------------------------
+# --- 6. 关掉自动登录这个后门 -----------------------------------------------
 if ($Cfg.DisableAutoLogon) {
     $winlogon = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon'
     try {
@@ -334,7 +337,7 @@ if ($Cfg.DisableAutoLogon) {
     }
 }
 
-# --- 7. marker + reboot -----------------------------------------------------
+# --- 7. 写标记 + 重启 ------------------------------------------------------
 try {
     New-Item -Path $RegRoot -Force | Out-Null
     Set-ItemProperty -Path $RegRoot -Name 'Done'      -Value 1            -Type DWord
@@ -352,4 +355,4 @@ if ($Cfg.RebootAtEnd) {
     Write-Log 'rebooting in 60 seconds'
     & shutdown.exe /r /t 60 /c "iVentoy deployment finished, restarting" /f
 }
-#endregion ------------------------------------------------------------------
+#endregion ----------------------------------------------------------------
