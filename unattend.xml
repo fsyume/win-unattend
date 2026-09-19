@@ -24,7 +24,7 @@
   使用前必须修改的地方（在文件里搜索 "EDIT ME"）：
     1. /IMAGE/NAME          -> install.wim 里的准确版本名
                                （非英文版介质上是本地化的，见下方「本地化介质警告」）
-    2. 本地管理员密码（两处：AutoLogon 与 UserAccounts，必须完全一致）
+    2. Administrator 密码（两处：AutoLogon 与 AdministratorPassword，必须完全一致）
     3. RegisteredOwner / RegisteredOrganization
 
   Windows 11 专属事项（这些不由此文件负责）：
@@ -313,6 +313,33 @@
       <RegisteredOwner>IT</RegisteredOwner>
       <TimeZone>China Standard Time</TimeZone>
     </component>
+
+    <!--
+      内置 Administrator 在 Windows 客户端 SKU 上默认是【禁用】状态。
+      下面 AdministratorPassword 只负责"设密码"，至于设密码是否顺带启用该账户，
+      属于各家文档说法不一的行为，所以这里在 specialize 阶段显式启用一次，
+      不依赖任何不确定行为。
+
+      specialize 在 oobeSystem 之前执行，所以等 OOBE 开始跑的时候，
+      这个账户已经是启用状态，OOBE 会直接以 Administrator 身份继续。
+
+      如果哪天你改回用自建账户，把整个 Microsoft-Windows-Deployment 组件删掉即可。
+    -->
+    <component name="Microsoft-Windows-Deployment"
+               processorArchitecture="amd64"
+               publicKeyToken="31bf3856ad364e35"
+               language="neutral"
+               versionScope="nonSxS"
+               xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State"
+               xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+      <RunSynchronous>
+        <RunSynchronousCommand wcm:action="add">
+          <Description>启用内置 Administrator 账户</Description>
+          <Order>1</Order>
+          <Path>cmd /c net user Administrator /active:yes</Path>
+        </RunSynchronousCommand>
+      </RunSynchronous>
+    </component>
   </settings>
 
   <!-- ====================== 阶段 3：oobeSystem ========================= -->
@@ -347,13 +374,13 @@
       -->
       <AutoLogon>
         <Password>
-          <!-- EDIT ME：必须和下面 LocalAccount 的密码完全一致 -->
-          <Value>ChangeMe!2024</Value>
+          <!-- EDIT ME：必须和下面 AdministratorPassword 的密码完全一致 -->
+          <Value>root123</Value>
           <PlainText>true</PlainText>
         </Password>
         <Enabled>true</Enabled>
         <LogonCount>1</LogonCount>
-        <Username>deploy</Username>
+        <Username>Administrator</Username>
       </AutoLogon>
 
       <OOBE>
@@ -366,19 +393,19 @@
         <ProtectYourPC>3</ProtectYourPC>
       </OOBE>
 
+      <!--
+        直接用内置 Administrator，不再创建额外的本地账户。
+
+        AdministratorPassword 设置该账户的密码，同时（在大多数情况下）
+        让它成为唯一可用的管理员账户，OOBE 就不会再问"给这台电脑创建用户"。
+        账户的启用由上面 specialize 阶段的 Microsoft-Windows-Deployment 保证。
+      -->
       <UserAccounts>
-        <LocalAccounts>
-          <LocalAccount wcm:action="add">
-            <Password>
-              <!-- EDIT ME：必须和上面 AutoLogon 的密码完全一致 -->
-              <Value>ChangeMe!2024</Value>
-              <PlainText>true</PlainText>
-            </Password>
-            <Name>deploy</Name>
-            <DisplayName>deploy</DisplayName>
-            <Group>Administrators</Group>
-          </LocalAccount>
-        </LocalAccounts>
+        <AdministratorPassword>
+          <!-- EDIT ME：必须和上面 AutoLogon 的密码完全一致 -->
+          <Value>root123</Value>
+          <PlainText>true</PlainText>
+        </AdministratorPassword>
       </UserAccounts>
     </component>
   </settings>

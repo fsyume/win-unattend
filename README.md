@@ -23,7 +23,7 @@
         │      （不做文件注入；万一真机报"缺少驱动"，见第 6 节补救）
         │
         └─(4) unattend.xml 生效：擦盘 → 建 GPT 分区 → 装 WIM
-               → 创建 deploy 账户 → 自动登录进桌面（结束）
+               → 启用内置 Administrator → 自动登录进桌面（结束）
 ```
 
 四个「自动化开关」缺一个就会停在某处等人点：
@@ -164,7 +164,7 @@ iVentoy 1.0.40+ 支持，**仅 X86_64 客户机**，三种模式：
 | 位置 | 改成 |
 |---|---|
 | `/IMAGE/NAME` 的 `Windows 11 Pro` | 你镜像里**准确的版本名**（见下方"中文 ISO 陷阱"） |
-| `AutoLogon` 的 `<Value>` | 本地管理员密码 |
+| `AutoLogon` 的 `<Value>` | Administrator 的密码 |
 | `UserAccounts` 的 `<Value>` | 同上，两处必须一致 |
 | `FullName` / `Organization` / `RegisteredOwner` / `RegisteredOrganization` | 你的信息 |
 
@@ -245,8 +245,8 @@ dism /Get-WimInfo /WimFile:D:\sources\install.wim
 | **自动命名** | ❌ 没有 | `unattend.xml` 不设 `<ComputerName>`，Windows 自己生成 `DESKTOP-XXXXXXX` 之类的随机名。想按序列号/MAC 命名必须加后置脚本 |
 | **加入域** | ❌ 没有 | 装完是工作组机器，需手动加域 |
 | **装软件 / 打驱动包** | ❌ 没有 | 只能手动装，或用其它手段（组策略、SCCM、Intune）在加域后推 |
-| **关闭自动登录** | ❌ 没有 | 自动登录保持开启，`Winlogon\DefaultPassword` 里明文存着本地管理员密码 |
-| 全自动装完 Win11 + 本地管理员 + 自动登录 | ✅ 有 | 这是当前方案的全部内容 |
+| **关闭自动登录** | ❌ 没有 | 自动登录保持开启，`Winlogon\DefaultPassword` 里明文存着 Administrator 的密码 |
+| 全自动装完 Win11 + 启用 Administrator + 自动登录 | ✅ 有 | 这是当前方案的全部内容 |
 
 **为什么不设 `ComputerName`**：写死一个固定名字会让所有机器同名，在同网段或同域里直接冲突。而用 iVentoy 的 MAC 变量也拼不出合法名字——Windows 计算机名最长 15 字符，带连字符的 MAC 本身就有 17 字符。
 
@@ -343,7 +343,8 @@ ipconfig /all
 | 系统语言/区域是中文 | 设置 → 时间和语言 |
 | 装到了预期的盘 | 装机时按 `Shift+F10` → `diskpart` → `list disk` 核对容量与磁盘号 |
 | Windows 版本正确 | `winver`，或 `dism /online /get-currentedition` |
-| `deploy` 账户在 Administrators 组 | `net localgroup Administrators` |
+| 内置 Administrator 已启用 | `net user Administrator`，看"帐户启用"是否为 Yes |
+| Administrator 密码可登录 | 注销后用 `root123` 登录（或按下面那条重启验证） |
 | 自动登录生效 | 重启一次，应无需输密码直接进桌面 |
 | 中文注释没把 answer file 弄坏 | 装机过程中没有出现"无法分析或处理无人应答文件" |
 
@@ -365,8 +366,13 @@ ipconfig /all
 
 有一个凭据会**以明文经过网络**：
 
-- `unattend.xml` 里的本地管理员密码 —— 明文写在文件里，且 iVentoy 的 HTTP 服务把 `user/` 目录
-  直接对外开放（`http://<IP>:16000/user/...`），同网段任何人 `curl` 就能拿到。
+- `unattend.xml` 里的 Administrator 密码（当前是 `root123`）—— 明文写在文件里，且 iVentoy 的
+  HTTP 服务把 `user/` 目录直接对外开放（`http://<IP>:16000/user/...`），同网段任何人 `curl` 就能拿到。
+
+⚠️ **当前配置是本方案里安全性最差的一档**，三者叠加：内置 Administrator（攻击者第一个尝试的账户名）
++ 自动登录（无需任何人输入密码就进桌面）+ 弱密码 `root123`，而且这个仓库是**公开**的，
+密码直接写在公网可见的文件里。**仅适合实验环境**。任何真实部署前至少要改密码，
+并考虑关掉自动登录。
 
 （之前 `deploy.ps1` 里的加域账号密码也是同样的暴露方式，该脚本已删除，所以这个风险点消失了。）
 
@@ -397,6 +403,8 @@ ipconfig /all
 | 装到一半卡住、报无法应用映像 | 分区布局与固件不匹配（UEFI 用了 MBR 布局），或 `INSTALL/NAME` 版本名写错 |
 | 装到错误的盘 / 擦错盘 | 别写死 `DiskID=0`；`_CLOSEST_`/`_MAX_SIZE` **不排除 USB 盘**，装机拔掉所有可移动存储；首次测试物理拔掉数据盘 |
 | 装完发现所有机器同名 | 不会发生：当前不设 `<ComputerName>`，Windows 会生成随机名。如果哪天你手动设了固定名，就会撞名 |
+| **装完停在锁屏，自动登录没生效** | 九成是 `AutoLogon` 与 `AdministratorPassword` 两处密码**不一致**（改密码时只改了一处）。这两处必须完全相同 |
+| 报密码不符合密码策略 | `root123` 只有 7 位、仅小写字母+数字（2 类字符）。单机默认策略不要求复杂度，所以正常能过；但若环境里下发了复杂度策略，Setup 会在这里失败。届时改成大小写+数字+符号的组合 |
 | UEFI 启动 Windows 花屏 | 1.0.25 已修，用最新版；菜单里也可设分辨率 |
 | 安全启动过不去 | 见第 4 节三种模式；个别机型要先使能 BIOS 的 UEFI CA |
 | 改动不生效 | iVentoy 修改配置后需重新"刷新镜像列表"；改了 `unattend.xml` 后确认没有旧副本残留 |
