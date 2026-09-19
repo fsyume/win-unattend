@@ -25,7 +25,6 @@
     1. /IMAGE/NAME          -> install.wim 里的准确版本名
                                （非英文版介质上是本地化的，见下方「本地化介质警告」）
     2. Administrator 密码（两处：AutoLogon 与 AdministratorPassword，必须完全一致）
-    3. RegisteredOwner / RegisteredOrganization
 
   Windows 11 专属事项（这些不由此文件负责）：
     * TPM 2.0 / 安全启动 / 内存 / CPU 检查，由 iVentoy 界面上的
@@ -256,10 +255,16 @@
       </ImageInstall>
 
       <UserData>
+        <!--
+          AcceptEula 必须保留：没有它，Windows Setup 会弹出许可条款页面，
+          全自动流程就断了。
+
+          FullName 和 Organization 也已按你的要求删除。它们和 specialize 阶段那两个
+          RegisteredOwner / RegisteredOrganization 是同一类"注册给谁"的展示性信息，
+          只是走 windowsPE 阶段、由 Microsoft-Windows-Setup 处理。
+          注意这两个元素【不支持空值】，要留就得填内容，不想要就必须整行删掉。
+        -->
         <AcceptEula>true</AcceptEula>
-        <!-- EDIT ME：改成你的信息 -->
-        <FullName>IT</FullName>
-        <Organization>YourCompany</Organization>
         <!--
           这里故意不写 ProductKey：本文件由 iVentoy 通过明文 HTTP 提供，
           把密钥写进去等于对整个局域网公开。
@@ -308,9 +313,14 @@
         想按序列号 / MAC 自动命名，需要一个后置脚本在首次登录时调用
         Rename-Computer 或 Add-Computer -NewName，见 README 的「已知缺口」一节。
       -->
-      <!-- EDIT ME：改成你的信息 -->
-      <RegisteredOrganization>YourCompany</RegisteredOrganization>
-      <RegisteredOwner>IT</RegisteredOwner>
+      <!--
+        RegisteredOwner / RegisteredOrganization 已按你的要求删除。
+        它们只是"注册给谁"的展示性元数据（systeminfo、注册表、
+        资产清点工具会读），不影响激活、授权、计算机名或加域。
+        需要时加回来即可（有效阶段同样包含 specialize）：
+          <RegisteredOrganization>公司名</RegisteredOrganization>
+          <RegisteredOwner>IT 部</RegisteredOwner>
+      -->
       <TimeZone>China Standard Time</TimeZone>
     </component>
   </settings>

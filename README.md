@@ -166,7 +166,16 @@ iVentoy 1.0.40+ 支持，**仅 X86_64 客户机**，三种模式：
 | `/IMAGE/NAME` 的 `Windows 11 Pro` | 你镜像里**准确的版本名**（见下方"中文 ISO 陷阱"） |
 | `AutoLogon` 的 `<Value>` | Administrator 的密码 |
 | `UserAccounts` 的 `<Value>` | 同上，两处必须一致 |
-| `FullName` / `Organization` / `RegisteredOwner` / `RegisteredOrganization` | 你的信息 |
+
+> **"注册给谁"的四个字段已全部删除**（`RegisteredOwner`、`RegisteredOrganization`、
+> `UserData` 里的 `FullName`、`Organization`）。它们只是展示性元数据——`systeminfo`、
+> 注册表 `HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion`、资产清点工具会读，
+> 不影响激活、授权、计算机名或加域。
+> 需要时按 README 里 `unattend.xml` 的注释加回来即可（注意 `FullName` / `Organization`
+> **不支持空值**，要留就必须填内容）。
+>
+> ⚠️ **`<AcceptEula>true</AcceptEula>` 绝对不能删** —— 没有它 Setup 会弹出许可条款页面，
+> 全自动流程就断了。
 
 **中文 ISO 陷阱（务必看）**：非英文版 Windows 安装介质的映像 **Name 通常是本地化的**。中文版 ISO 用 `dism /Get-WimInfo` 查出来的"名称"很可能是 `Windows 11 专业版` 而不是 `Windows 11 Pro`。必须**照 dism 原样抄**。
 
