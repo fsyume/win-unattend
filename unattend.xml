@@ -389,15 +389,18 @@
                xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
 
       <!--
-        LogonCount 是自动登录的次数，这里 1 次就够，因为装完没有会自动重启的后置脚本。
+        LogonCount 是自动登录的次数。这里保持 1：
+        下面 FirstLogonCommands 只是下载并【弹出】驱动总裁的图形界面，
+        由现场人员确认安装，脚本本身不重启系统，所以 1 次足够。
+
         微软文档要求用 AutoLogon 时【必须】指定 LogonCount，所以不能省略。
+
+        如果以后改成"首次登录跑静默脚本、脚本结尾自动重启"的做法，
+        必须把 LogonCount 调到 2 以上（通常 3），否则第二次开机会停在锁屏，
+        后面的步骤永远不会执行。
 
         Username 必须是 Administrator：这是微软指定的启用内置 Administrator 的方式，
         见下面 UserAccounts 处的说明。
-
-        以后如果加回"首次登录后跑脚本、脚本结尾会重启"的做法，
-        必须把 LogonCount 调到 2 以上（通常 3），否则第二次开机会停在锁屏，
-        后面的步骤永远不会执行。
       -->
       <AutoLogon>
         <Password>
@@ -409,6 +412,53 @@
         <LogonCount>1</LogonCount>
         <Username>Administrator</Username>
       </AutoLogon>
+
+      <!--
+        首次登录时自动做的事：把驱动总裁拉下来并启动它，装完驱动。
+
+        【为什么用 FirstLogonCommands，而不是 $OEM$\SetupComplete.cmd】
+        微软文档对 SetupComplete.cmd 写了一句很关键的话：
+            "This setting is disabled when using OEM product keys,
+             except on Enterprise editions and Windows Server operating systems."
+        也就是说 OEM 品牌机（固件里带密钥的那种）上它会被【直接跳过】。
+        我们的目标机大概率正是这类机器，所以那条路不可靠。
+
+        【权限没问题】本文件里 FirstLogonCommands 的有效阶段是 oobeSystem，
+        文档另外说明：
+            "When a user with administrative privileges logs in for the first
+             time, these commands are run with elevated access privileges."
+        我们用 Administrator 自动登录，天然满足。
+
+        【子元素顺序】按文档：CommandLine -> Description -> Order -> RequiresUserInput。
+
+        【两条命令的分工】
+          第 1 条：从 iVentoy 服务器把小脚本拉下来（URL 里的 $$...$$ 由 iVentoy 展开）
+          第 2 条：执行小脚本，并把安装包地址传给它
+        小脚本会下载驱动总裁安装包并【弹出图形界面】，由现场人员确认，
+        所以【不加 /S 静默参数】。
+
+        【依赖】<iVentoy>\user\deploy\ 下必须同时有这两个文件：
+                  install-drivers.cmd   本仓库提供，原样复制
+                  DrvCeoSetup.exe       驱动总裁安装包，自行下载后改成这个名字
+                详见 user/deploy/README.md
+
+        【日志】客户机上 C:\Windows\Temp\install-drivers.log
+                脚本会保留在 C:\Windows\Temp\install-drivers.cmd，现场可手动重跑。
+      -->
+      <FirstLogonCommands>
+        <SynchronousCommand wcm:action="add">
+          <CommandLine>cmd /c curl -sSL -o C:\Windows\Temp\install-drivers.cmd http://$$VT_SERVER_IP$$:$$VT_HTTP_PORT$$/user/deploy/install-drivers.cmd</CommandLine>
+          <Description>从 iVentoy 服务器下载驱动安装脚本</Description>
+          <Order>1</Order>
+          <RequiresUserInput>false</RequiresUserInput>
+        </SynchronousCommand>
+        <SynchronousCommand wcm:action="add">
+          <CommandLine>cmd /c C:\Windows\Temp\install-drivers.cmd http://$$VT_SERVER_IP$$:$$VT_HTTP_PORT$$/user/deploy/DrvCeoSetup.exe</CommandLine>
+          <Description>下载并启动驱动总裁，由现场人员确认后安装</Description>
+          <Order>2</Order>
+          <RequiresUserInput>false</RequiresUserInput>
+        </SynchronousCommand>
+      </FirstLogonCommands>
 
       <OOBE>
         <HideEULAPage>true</HideEULAPage>

@@ -37,7 +37,7 @@
 
 ## 0. 方案总览
 
-整体思路：**iVentoy 负责把 ISO 送到机器上，`unattend.xml` 负责回答全部安装问题**。全程无人干预，装完停在桌面。
+整体思路：**iVentoy 负责把 ISO 送到机器上，`unattend.xml` 负责回答全部安装问题，首次登录后再自动把驱动装起来**。
 
 ```
 客户端加电 (UEFI PXE)
@@ -50,8 +50,13 @@
         ├─(3) 依赖 ISO 内 boot.wim 自带的网卡驱动把 ISO 挂成本地盘
         │      （不做文件注入；万一真机报"缺少驱动"，见第 6 节补救）
         │
-        └─(4) unattend.xml 生效：擦盘 → 建 GPT 分区 → 装 WIM
-               → 启用内置 Administrator → 自动登录进桌面（结束）
+        ├─(4) unattend.xml 生效：擦盘 → 建 GPT 分区 → 装 WIM
+        │      → 启用内置 Administrator → 自动登录
+        │
+        └─(5) 首次登录 FirstLogonCommands：
+               从 iVentoy 服务器拉 install-drivers.cmd 并执行
+                 → 下载驱动总裁 → 【弹出图形界面】由现场人员确认安装
+               （这一步需要人点，不是全自动；详见 5.4 节）
 ```
 
 四个「自动化开关」缺一个就会停在某处等人点：
@@ -71,8 +76,11 @@
 <iVentoy 解压目录>\
 ├── iso\                                 ← 放 Windows 11 ISO（可软链接）
 └── user\
-    └── scripts\
-        └── unattend.xml                 ← 【本仓库 unattend.xml 放这里】
+    ├── scripts\
+    │   └── unattend.xml                 ← 【本仓库 unattend.xml 放这里】
+    └── deploy\                          ← 首次登录时下发给客户机的文件
+        ├── install-drivers.cmd          ← 【本仓库 user/deploy/install-drivers.cmd】
+        └── DrvCeoSetup.exe              ← 驱动总裁安装包，自行下载后改成这个名字
 ```
 
 本仓库只有三个文件：`unattend.xml`（answer file）、`README.md`（本文档）、`.gitignore`。
@@ -344,9 +352,11 @@ dism /Get-WimInfo /WimFile:D:\sources\install.wim
 |---|---|---|
 | **自动命名** | ❌ 没有 | `unattend.xml` 不设 `<ComputerName>`，Windows 自己生成 `DESKTOP-XXXXXXX` 之类的随机名。想按序列号/MAC 命名必须加后置脚本 |
 | **加入域** | ❌ 没有 | 装完是工作组机器，需手动加域 |
-| **装软件 / 打驱动包** | ❌ 没有 | 只能手动装，或用其它手段（组策略、SCCM、Intune）在加域后推 |
+| **打驱动** | ⚠️ 半自动 | 首次登录会自动弹出驱动总裁，但**需要人工确认**（见 5.4 节）。要全自动得改成 `/S` 静默 |
+| **装软件** | ❌ 没有 | 只能手动装，或用其它手段（组策略、SCCM、Intune）在加域后推 |
 | **关闭自动登录** | ❌ 没有 | 自动登录保持开启，`Winlogon\DefaultPassword` 里明文存着 Administrator 的密码 |
-| 全自动装完 Win11 + 启用 Administrator + 自动登录 | ✅ 有 | 这是当前方案的全部内容 |
+| 全自动装完 Win11 + 启用 Administrator + 自动登录 | ✅ 有 | 装完即自动登录进桌面 |
+| 首次登录自动拉起驱动总裁 | ✅ 有 | 但保留图形界面，由现场人员确认后安装 |
 
 **为什么不设 `ComputerName`**：写死一个固定名字会让所有机器同名，在同网段或同域里直接冲突。而用 iVentoy 的 MAC 变量也拼不出合法名字——Windows 计算机名最长 15 字符，带连字符的 MAC 本身就有 17 字符。
 
@@ -362,6 +372,85 @@ git show 948160a:user/injection/VentoyAutoRun.bat > VentoyAutoRun.bat
 2. 把 `<LogonCount>` 从 `1` 调回 `3`——因为那个脚本结尾会重启，1 次自动登录不够，第二次开机会停在锁屏。
 
 第 6 节的缺驱动补救方案同理，需要重新做注入包。
+
+---
+
+### 5.4 装完自动装驱动（首次登录钩子）
+
+`unattend.xml` 的 `FirstLogonCommands` 在**首次登录时**自动做两件事：
+
+1. 从 iVentoy 服务器下载 `install-drivers.cmd`
+2. 执行它，并把驱动总裁安装包的地址传进去
+
+小脚本再去下载安装包并**弹出图形界面**，由现场人员确认后安装——**不加 `/S`，所以不是全自动**。
+
+**为什么用 `FirstLogonCommands` 而不是 `$OEM$\SetupComplete.cmd`**
+
+微软文档对 `SetupComplete.cmd` 写了一句关键限制：
+
+> This setting is **disabled when using OEM product keys**,
+> except on Enterprise editions and Windows Server operating systems.
+
+OEM 品牌机（固件里带密钥的那种）上它会被**直接跳过**，而目标机大概率正是这类机器，所以那条路不可靠。
+
+**权限为什么没问题**
+
+文档明确说明：
+
+> When a user with administrative privileges logs in for the first time,
+> these commands are run with **elevated access privileges**.
+
+我们用 Administrator 自动登录，天然满足。
+
+**你需要准备两个文件**
+
+放进 `<iVentoy 解压目录>\user\deploy\`：
+
+| 文件 | 来源 |
+|---|---|
+| `install-drivers.cmd` | 本仓库 `user/deploy/install-drivers.cmd`，原样复制 |
+| `DrvCeoSetup.exe` | 从 <https://www.sysceo.com/software-softwarei-id-258.html> 下载后**改名** |
+
+安装包必须叫 `DrvCeoSetup.exe`，因为 `unattend.xml` 里的 URL 写死了这个名字（URL 里带中文要转义，容易出错）。想换名字就改 `unattend.xml` 里那处 URL。
+
+**子元素顺序**（按微软文档）：
+
+`CommandLine` → `Description` → `Order` → `RequiresUserInput`。顺序写错会导致 answer file 解析失败。
+
+#### 想改成全自动（静默）
+
+社区封装脚本用的是：
+
+```bat
+start /wait "" "驱动总裁安装包.exe" /S
+```
+
+- `/S` = 静默安装 + 自动安装驱动，装完落在 `C:\Program Files (x86)\SysCeo`（32 位系统在 `C:\Program Files\SysCeo`）
+- ⚠️ **这不是官方文档**，而是[无忧启动论坛封装脚本](https://bbs.wuyou.net/archiver/?tid-449005.html)里的实战做法。改成静默前，先在一台机器上手工验证 `/S` 的真实行为。
+- 改成静默后还要注意：若它装完自动重启，`LogonCount=1` 会让机器停在锁屏（那时活已经干完，倒也未尝不可）。
+
+#### 三个必须注意的点
+
+1. **客户机必须能上公网**。驱动总裁是联网下载驱动的；只通局域网、不通公网它会失败（脚本日志里能看到）。
+2. **可能被改浏览器主页**。论坛帖里就有人直接问"那你这个搞完还会改主页吗"。**量产前务必在一台机器上验证**浏览器主页和默认搜索有没有被改。
+3. **企业合规**：如果对驱动版本有要求，建议改用厂商驱动包 + `pnputil` 推，而不是让它自己联网挑（参考第 6 节的做法）。
+
+#### 排查
+
+客户机上：
+
+```
+C:\Windows\Temp\install-drivers.log      ← 脚本日志
+C:\Windows\Temp\install-drivers.cmd      ← 脚本本体，可手动重跑
+```
+
+手动重跑：
+
+```cmd
+C:\Windows\Temp\install-drivers.cmd http://<服务器IP>:16000/user/deploy/DrvCeoSetup.exe
+```
+
+浏览器里直接打开那个 URL，也能验证 iVentoy 是否正常提供文件。
 
 ---
 
@@ -447,6 +536,8 @@ ipconfig /all
 | Administrator 密码可登录 | 注销后用 `root123` 登录（或按下面那条重启验证） |
 | 自动登录生效 | 重启一次，应无需输密码直接进桌面 |
 | 中文注释没把 answer file 弄坏 | 装机过程中没有出现"无法分析或处理无人应答文件" |
+| 首次登录自动拉起驱动总裁 | 登录后应自动弹出安装界面；日志见 `C:\Windows\Temp\install-drivers.log` |
+| 驱动装完没有副作用 | 检查浏览器主页 / 默认搜索有没有被改（见 5.4 节） |
 
 > 计算机名会是 `DESKTOP-XXXXXXX` 这类随机名——这是当前方案的预期行为，不是故障，详见 5.3 节。
 
@@ -498,6 +589,9 @@ ipconfig /all
 | 启动菜单停住不自动走 | 菜单默认超时时间 = 0 |
 | 停在"选择自动安装脚本" | 脚本选择超时时间 = 0 |
 | 分区界面弹出来了 | `unattend.xml` 没生效：路径/默认脚本编号/是否放在 `user/scripts` |
+| **装完没弹出驱动总裁** | 看 `C:\Windows\Temp\install-drivers.log`。没这个文件说明第 1 条命令就没跑起来 → 检查 iVentoy 的 16000 端口通不通、`user\deploy\` 下有没有 `install-drivers.cmd` |
+| 驱动脚本报下载失败 | `<iVentoy>\user\deploy\` 下缺 `DrvCeoSetup.exe`，或文件名不是这个（URL 写死了）。用浏览器打开那个 URL 可直接验证 |
+| 驱动总裁装不出驱动 | 它需要**公网**。客户机只通局域网时它会失败——先确认客户机能不能上外网 |
 | **停在「产品密钥」页** | ① `UserData` 里缺 `ProductKey`（它才是唯一能跳过密钥页的元素）；② 或密钥与镜像版本对不上，例如拿专业版密钥配 China Only 镜像。见 5.1 节 |
 | **装出来的版本不是专业版** | 用了 `/IMAGE/INDEX` 且索引写错。多版本 ISO 上索引 1 是**家庭版**，专业版是 4。改用 `/IMAGE/NAME` 可避免静默装错 |
 | 卡在「选择要安装的版本」页 | `/IMAGE/NAME` 和镜像里的 Name 不匹配，Setup 回退到交互式选择。用 `dism /Get-WimInfo` 照抄准确的 Name |
