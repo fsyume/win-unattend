@@ -176,6 +176,15 @@ iVentoy 1.0.40+ 支持，**仅 X86_64 客户机**，三种模式：
 >
 > ⚠️ **`<AcceptEula>true</AcceptEula>` 绝对不能删** —— 没有它 Setup 会弹出许可条款页面，
 > 全自动流程就断了。
+>
+> ⚠️ **`<ProductKey>` 也不能删**。它的官方定义是 "Specifies the Windows image to install during
+> Windows Setup"，既决定装哪个版本，也是**唯一能跳过「产品密钥」页的元素**。
+> 当前填的是微软官方公开的 KMS 客户端通用密钥（Windows 11 Pro，`W269N-...`），
+> 它**只选版本、不具备激活功能**，属于公开信息，放在明文 HTTP 提供的文件里没有泄露风险。
+> 想换成别的版本，改 `<Key>` 即可，XML 注释里列了 Pro / Pro N / Home / Enterprise / Education 五个。
+> 真正的激活仍然靠 KMS / ADBA / 数字许可证。
+>
+> **千万不要把真实的 MAK 零售密钥填进去** —— 那才是有泄露风险的。
 
 **中文 ISO 陷阱（务必看）**：非英文版 Windows 安装介质的映像 **Name 通常是本地化的**。中文版 ISO 用 `dism /Get-WimInfo` 查出来的"名称"很可能是 `Windows 11 专业版` 而不是 `Windows 11 Pro`。必须**照 dism 原样抄**。
 
@@ -439,6 +448,8 @@ ipconfig /all
 | 启动菜单停住不自动走 | 菜单默认超时时间 = 0 |
 | 停在"选择自动安装脚本" | 脚本选择超时时间 = 0 |
 | 分区界面弹出来了 | `unattend.xml` 没生效：路径/默认脚本编号/是否放在 `user/scripts` |
+| **停在「产品密钥」页** | `UserData` 里缺 `ProductKey`。`/IMAGE/NAME` 只负责在 WIM 里挑映像，**跳不过密钥页**。本仓库已加入微软公开的 KMS 客户端通用密钥来选版本（见 5.1 节） |
+| 开机先出现「语言/键盘」选择页 | 说明 `unattend.xml` **完全没被读到**。此时改 answer file 内容没用，先查：文件是否复制到 `user\scripts\`、是否设为默认自动脚本、脚本选择超时是否为 0 |
 | **报"无法分析或处理无人参与应答文件"** | **编码问题**：`unattend.xml` 丢了 UTF-8 BOM（多见于用编辑器另存为 ANSI/GBK，或用了不保留 BOM 的工具）。用 VS Code 确认右下角是 `UTF-8 with BOM` |
 | 报"缺少计算机所需的介质驱动程序" | **网卡驱动**问题（Hyper-V 测不出来，只有真机会遇到）→ 见第 6 节补救：`Shift+F10` + `ipconfig /all` 确认 |
 | 装到一半卡住、报无法应用映像 | 分区布局与固件不匹配（UEFI 用了 MBR 布局），或 `INSTALL/NAME` 版本名写错 |

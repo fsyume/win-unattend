@@ -265,16 +265,38 @@
           注意这两个元素【不支持空值】，要留就得填内容，不想要就必须整行删掉。
         -->
         <AcceptEula>true</AcceptEula>
+
         <!--
-          这里故意不写 ProductKey：本文件由 iVentoy 通过明文 HTTP 提供，
-          把密钥写进去等于对整个局域网公开。
-          如果用 KMS/ADBA 激活，可以在这里填微软公开的 KMS 客户端通用密钥，
-          但不要填真实的 MAK：
-            <ProductKey>
-              <Key>W269N-WFGWX-YVC9B-4J6C9-T83GX</Key>
-              <WillShowUI>OnError</WillShowUI>
-            </ProductKey>
+          为什么必须有 ProductKey：
+          微软文档对 Microsoft-Windows-Setup\UserData\ProductKey\Key 的定义是
+          "Specifies the Windows image to install during Windows Setup"，
+          它同时也是【唯一能跳过「产品密钥」页的元素】。
+          上面 ImageInstall 里的 /IMAGE/NAME 只负责在 install.wim 里挑映像，
+          管不到密钥页，所以只写 /IMAGE/NAME 会卡在那一页。
+
+          下面这个是微软官方公开的 KMS 客户端通用密钥（Windows 11 Pro）。
+          它只用来"选版本"，【不具备激活功能】——公开信息，不是机密，
+          所以放在明文 HTTP 提供的文件里没有泄露问题。
+          真正的激活仍然要靠 KMS / ADBA / 数字许可证。
+
+          ⚠️ 千万不要把真实的 MAK 零售密钥写在这里，那才是有泄露风险的。
+
+          常用户籍的通用密钥（想换版本就换这里的 Key）：
+            Windows 11 Pro          W269N-WFGWX-YVC9B-4J6C9-T83GX
+            Windows 11 Pro N        MH37W-N47XK-V7XM9-C7227-GCQG9
+            Windows 11 Home         YTMG3-N6DKC-DKB77-7M9GH-8HVX7
+            Windows 11 Enterprise   NPPR9-FWDCX-D2C8J-H872K-2YT43
+            Windows 11 Education    NW6C2-QMPVW-D7KKK-3GKT6-VCFB2
+
+          WillShowUI 取值：Always / OnError（默认）/ Never。
+          这里用 OnError：密钥正常时不弹页面；万一密钥被拒，会弹出密钥页
+          让你看到问题，而不是直接静默失败。
+          测试通过后想更彻底，可以改成 Never（任何情况下都不弹）。
         -->
+        <ProductKey>
+          <Key>W269N-WFGWX-YVC9B-4J6C9-T83GX</Key>
+          <WillShowUI>OnError</WillShowUI>
+        </ProductKey>
       </UserData>
     </component>
   </settings>
