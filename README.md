@@ -1,727 +1,509 @@
 # iVentoy 部署 Windows 11 无人值守 — 实施手册
-# 以下内容为AI生成注意甄别
 
-针对你的环境选定：**UEFI/GPT 客户端 + Windows 11 + 已有第三方 DHCP + 全自动装机（不含后置自动化）**。
+> ⚠️ 以下内容为 AI 生成，注意甄别。
+>
+> 适用范围：**UEFI/GPT 客户端 + Windows 11 + 已有第三方 DHCP + 全自动装机**。
+> **不包含**改名 / 加域 / 装软件 / 推驱动（后置脚本已移除，见 [已知缺口](#已知缺口)）。
 
-> **当前范围说明**：现阶段只做「无人值守装完 Windows 11」，**不包含**改名 / 加域 / 装软件 / 推驱动。
-> 后置脚本已被移除，原因和加回方法见 [第 5.3 节「已知缺口」](#53-已知缺口现阶段没做的部分)。
+目录： [环境](#环境快照) · [流程](#流程) · [文件清单](#文件清单) · [1 服务端](#1-服务端) ·
+[2 DHCP](#2-与第三方-dhcp-共存) · [3 界面配置](#3-界面配置四个开关) · [4 answer file](#4-unattendxml) ·
+[5 驱动钩子](#5-首次登录装驱动) · [6 缺驱动补救](#6-缺驱动补救备用) · [7 验收](#7-单机验收) ·
+[8 授权](#8-批量与授权) · [9 安全](#9-安全必读) · [10 排错](#10-排错速查) · [11 遗留问题](#11-遗留问题) · [参考](#参考)
 
 ---
 
 ## 环境快照
 
-下表是**实测通过**的当前环境。换机器、换版本时请对照更新本表，省得以后排查时搞不清"当时到底是什么环境"。
+下表是**实测通过**的环境。换机器、换版本时对照更新，省得排查时搞不清"当时是什么环境"。
 
 | 项 | 值 |
 |---|---|
-| iVentoy 版本 | **1.0.43**（Windows x64，**免费版**） |
-| 主程序 | `iVentoy_64.exe` |
+| iVentoy | **1.0.43**（Windows x64，**免费版**），主程序 `iVentoy_64.exe` |
 | 解压路径 | `C:\Users\cyk\Downloads\iventoy-1.0.43-win64-free\iventoy-1.0.43\` |
-| 管理界面 | `http://127.0.0.1:26000` |
-| HTTP 服务端口 | `16000`（客户端要能访问，用来传 ISO 内容） |
-| 自动安装脚本 | `<iVentoy>\user\scripts\unattend.xml` |
-| **当前上线镜像** | `zh-cn_windows_11_consumer_editions_version_25h2_updated_sep_2026_x64_dvd_cb71b7e8.iso`（9.12 GB，consumer 多版本） |
-| 目标版本 | Windows 11 Pro（`/IMAGE/NAME` = `Windows 11 Pro`；该镜像里是索引 4） |
-| 授权 | 免费版：**最多 20 个客户端、禁止商用**（见第 8 节） |
-| 状态 | ✅ 已端到端实测通过（见下方「已验证的完整链路」） |
+| 端口 | 管理界面 `26000`、HTTP `16000`（**客户端要能访问**，用来传 ISO 内容）、NBD `10809` |
+| 自动安装脚本 | `<iVentoy>\user\scripts\unattend.xml`（**25589 字节**） |
+| 当前上线镜像 | `zh-cn_windows_11_consumer_editions_version_25h2_updated_sep_2026_x64_dvd_cb71b7e8.iso`（9.12 GB，consumer 多版本） |
+| 目标版本 | Windows 11 Pro（`/IMAGE/NAME` = `Windows 11 Pro`，该镜像里是索引 4） |
+| 授权 | 免费版最多 20 客户端、禁止商用（见 [8 授权](#8-批量与授权)） |
+| 状态 | ✅ 已端到端实测通过 |
 
-### ✅ 已验证的完整链路（实测通过）
+**已验证的完整链路**（每一环都有日志证据，不是推断）：
 
-下表每一环都有日志证据，不是推断：
-
-| 环节 | 证据 | 状态 |
-|---|---|---|
-| iVentoy 下发 answer file | 客户端 `ventoy.log`：`SaveBuffer2File <ventoy\autoinstall_1> len:25589` | ✅ |
-| 变量展开 | 同上：`UnattendVarExpand` → `X:\Unattend.xml` | ✅ |
-| 全自动装机 | 中途无需人工介入 | ✅ |
-| 首次登录触发钩子 | 脚本被下载到 `C:\Windows\Temp\install-drivers.cmd` | ✅ |
-| 按清单取回 tool | `install-drivers.log`：`download finished: ok=112 bad=0` | ✅ |
-| 启动驱动安装 | 同上：`launching start.bat in C:\tool\...` + `launched, script exits` | ✅ |
-| DrvCeo 实际运行 | 手动复现确认；Hyper-V 虚拟机无驱动可装，故很快退出 | ✅ |
-
-**判断"客户端到底拿到哪一版脚本"的可靠办法**：客户端每次引导后会把日志回传到
-`<iVentoy>\log\client\<客户端IP>.zip`，解压看 `client_info\ventoy.log` 里
-`len:` 的数字，必须等于你磁盘上 `unattend.xml` 的实际字节数。
-
-> ⚠️ **不要用服务端 `log\log.txt` 判断客户端有没有请求过文件**——iVentoy
-> **只记录失败的 `user/` 请求（404），成功的下载一条都不记**。用"日志里没有"推断
-> "客户端没请求"是错的（我在排查中犯过这个错）。
-
-### ⚠️ 两个尚未查清的问题
-
-**1. `Windows.old` 为什么存在？**
-
-answer file 里写的是 `<WillWipeDisk>true</WillWipeDisk>`，**如果生效，磁盘会被清空，
-不该留下 `Windows.old`**。但它一直在。这意味着**分区那一步可能没按预期执行**，
-是一个潜在的安全问题（给带数据的机器装机时磁盘可能不被清空）。
-
-**下次在真机上装机时留意**：有没有出现「你想将 Windows 安装在哪里」的分区选择页？
-若出现，说明 `DiskConfiguration` 没生效，再查 `C:\Windows\Panther\setuperr.log`。
-
-**2. 日志时间戳不精确（纯影响可读性）**
-
-`install-drivers.log` 里所有 `ok:` 行显示的是同一个时间，因为批处理的 `for` 循环里
-`%time%` 只在**进入循环时展开一次**。想显示真实时间要用延迟展开 `!time!`。
-
-**这一条故意没改**——当前脚本是实测通过的，为一个纯显示问题去改动它、还要再花一轮
-装机验证，不划算。等下次因功能需要改这个脚本时顺手修掉即可。
-
-### `iso\` 目录里的另外两个文件都不是本方案在用的
-
-| 文件 | 说明 |
+| 环节 | 证据 |
 |---|---|
-| `Win11_25H2_Pro_Chinese_Simplified_x64_v2.iso` | **已弃用**。是 China Only 专供版（`EDITIONID=ProfessionalCountrySpecific`），既没有公开的通用密钥，`NAME` 也不是 `Windows 11 Pro`，正是当初卡住的根因。留档仅作参考 |
-| `FirPE-V1.9.2.iso` | PE 维护盘，与 Windows 无人值守无关 |
+| 下发 answer file + 变量展开 | 客户端 `ventoy.log`：`SaveBuffer2File <ventoy\autoinstall_1> len:25589`、`UnattendVarExpand` → `X:\Unattend.xml` |
+| 全自动装机 → 自动登录 | 中途无需人工介入 |
+| 首次登录钩子 | 脚本落到 `C:\Windows\Temp\install-drivers.cmd` |
+| 按清单取回 tool | `install-drivers.log`：`download finished: ok=114 bad=0` |
+| 启动驱动安装 | 同上：`launching start.bat in C:\tool\...` + `launched, script exits` |
+| DrvCeo 运行 | 手动复现确认；Hyper-V 无驱动可装故很快退出，看起来像没跑 |
 
-> 版本建议：**1.0.43 或更新**。1.0.43 起"自动启动失败会回退到手动模式，页面不再整体退出"，
-> 且修掉了 wimboot 模式启动 Windows 时自动安装脚本不生效的 BUG。
+> **判断客户端拿到哪一版脚本**：客户端每次引导会把日志回传到
+> `<iVentoy>\log\client\<客户端IP>.zip`，解压看 `client_info\ventoy.log` 里
+> `len:` 的数字，**必须等于你磁盘上 `unattend.xml` 的字节数**。
+>
+> ⚠️ **不要用服务端 `log\log.txt` 判断客户端有没有请求过文件**——iVentoy
+> **只记失败的 `user/` 请求（404），成功的下载一条都不记**。"日志里没有"推不出"客户端没请求"。
 
 ---
 
-## 0. 方案总览
-
-整体思路：**iVentoy 负责把 ISO 送到机器上，`unattend.xml` 负责回答全部安装问题，首次登录后再自动把驱动装起来**。
+## 流程
 
 ```
 客户端加电 (UEFI PXE)
-        │
-        ├─(1) 第三方 DHCP 只发 IP；iVentoy 以 ProxyNet 模式补 next-server/bootfile
-        │
-        ├─(2) iVentoy 送 iPXE loader → 显示启动菜单
-        │      菜单超时 5s → 自动选「默认启动文件」= Windows 11 ISO
-        │
-        ├─(3) 依赖 ISO 内 boot.wim 自带的网卡驱动把 ISO 挂成本地盘
-        │      （不做文件注入；万一真机报"缺少驱动"，见第 6 节补救）
-        │
-        ├─(4) unattend.xml 生效：擦盘 → 建 GPT 分区 → 装 WIM
-        │      → 启用内置 Administrator → 自动登录
-        │
-        └─(5) 首次登录 FirstLogonCommands：
-               从 iVentoy 服务器拉 install-drivers.cmd 并执行
-                 → 下载驱动总裁 → 【弹出图形界面】由现场人员确认安装
-               （这一步需要人点，不是全自动；详见 5.4 节）
+ ├ (1) 第三方 DHCP 只发 IP；iVentoy 以 ProxyNet 补 next-server/bootfile
+ ├ (2) 送 iPXE loader → 菜单超时 5s → 自动选「默认启动文件」= Win11 ISO
+ ├ (3) 靠 ISO 内 boot.wim 自带网卡驱动把 ISO 挂成本地盘（不做文件注入）
+ ├ (4) unattend.xml：擦盘 → GPT 分区 → 装 WIM → 启用内置 Administrator → 自动登录
+ └ (5) 首次登录 FirstLogonCommands：拉 install-drivers.cmd → 下载 tool → 跑 start.bat
+        （驱动总裁保留图形界面，需现场人员确认，不是全自动）
 ```
 
-四个「自动化开关」缺一个就会停在某处等人点：
+**四个自动化开关，缺一个就停在某处等人点**：
 
 | 开关 | 位置 | 不配的后果 |
 |---|---|---|
 | 菜单默认超时时间 | 参数设置 | 卡在启动菜单 |
 | 设为默认启动文件 | 镜像管理 | 超时后走列表第 1 个 ISO |
-| 自动安装脚本 | 镜像管理 | 到分区/OOBE 全部手点 |
+| 自动安装脚本 | 镜像管理 | 分区 / OOBE 全部手点 |
 | 脚本选择超时时间 | 镜像管理 | 卡在"选哪个安装脚本" |
 
 ---
 
-## 1. 文件清单
+## 文件清单
+
+仓库只有 6 个文件；两个 `README.md` 是文档，其余按下面位置投放：
 
 ```
-<iVentoy 解压目录>\
-├── iso\                                 ← 放 Windows 11 ISO（可软链接）
-└── user\
-    ├── scripts\
-    │   └── unattend.xml                 ← 【本仓库 unattend.xml 放这里】
-    └── deploy\                          ← 首次登录时下发给客户机的文件
-        ├── install-drivers.cmd          ← 【本仓库 user/deploy/install-drivers.cmd】
-        └── DrvCeoSetup.exe              ← 驱动总裁安装包，自行下载后改成这个名字
+本仓库                                →  <iVentoy 解压目录>\
+├── unattend.xml                      →  user\scripts\unattend.xml
+└── user\deploy\                                  ← 首次登录下发给客户机
+    ├── install-drivers.cmd           →  user\deploy\install-drivers.cmd
+    ├── tool_files.txt                →  user\deploy\tool_files.txt   （清单 114 项）
+    └── (tool\)                       →  user\deploy\tool\            （约 999 MB，不进 git）
+
+iso\                                  ← 放 Windows 11 ISO（可软链接）
 ```
 
-本仓库只有三个文件：`unattend.xml`（answer file）、`README.md`（本文档）、`.gitignore`。
-后置脚本 `deploy.ps1` 和注入负载 `VentoyAutoRun.bat` 已按你的要求删除，
-需要时可以从 git 历史里取回（见第 5.3 节）。
+**命名铁律**（官方要求）：iVentoy 解压路径、`iso` 目录名与 ISO 文件名、脚本名，**都不能有中文或空格**。
 
-**命名铁律**（官方明确要求）：iVentoy 解压路径、`iso` 目录下的目录名和 ISO 文件名、脚本名，**都不能有中文或空格**。
+`iso\` 里另外两个文件与本方案无关：
+
+| 文件 | 说明 |
+|---|---|
+| `Win11_25H2_Pro_Chinese_Simplified_x64_v2.iso` | **已弃用**。China Only 专供版（`EDITIONID=ProfessionalCountrySpecific`），没有公开通用密钥，`NAME` 也不是 `Windows 11 Pro`，正是当初卡住的根因 |
+| `FirPE-V1.9.2.iso` | PE 维护盘 |
 
 ---
 
-## 2. 步骤一：iVentoy 服务端
+## 1. 服务端
 
-1. 用 **1.0.43 或更新**版本。理由：1.0.43 起"自动启动失败会回退到手动模式，页面不再整体退出"；1.0.43 还修了 wimboot 模式启动 Windows 时自动安装脚本不生效的 BUG（这正是你要用的功能）。
-2. 下载 win64（或 linux64）包，解压到**无中文无空格**的路径。
-3. ISO 放进 `iso\`。不想占空间就软链接：
-   ```
-   mklink D:\iventoy\iso\Win11.iso  E:\download\Win11_24H2_x64.iso
-   ln -s /opt/iso/Win11.iso /opt/iventoy/iso/Win11.iso
-   ```
-4. 启动：
-   - Windows：双击 exe，会自动开浏览器；也可注册为开机自启动服务（官方文档《注册 Windows 服务开机自启动》）。
-   - Linux：`sudo bash iventoy.sh start`；自启动用 `sudo bash iventoy.sh -R start`（`-R` = 按上次参数启动，前提是先手动成功启动过一次）。
-5. 浏览器用 **Chrome 或 Firefox**（官方只测了这两个），访问 `http://127.0.0.1:26000`。
+- 用 **1.0.43 或更新**。1.0.43 起"自动启动失败会回退到手动模式，页面不再整体退出"，并修掉 wimboot 模式启动 Windows 时自动安装脚本不生效的 BUG（正是本方案要用的功能）。
+- 解压到**无中文无空格**路径；ISO 放进 `iso\`，不想占空间就软链接：
+  ```cmd
+  mklink D:\iventoy\iso\Win11.iso E:\download\Win11_24H2_x64.iso     :: Windows
+  ln -s /opt/iso/Win11.iso /opt/iventoy/iso/Win11.iso                # Linux
+  ```
+- 启动：Windows 双击 exe；Linux `sudo bash iventoy.sh start`（自启动用 `-R`，前提是先手动成功启动过一次）。
+- 浏览器用 **Chrome 或 Firefox**（官方只测过这两个），访问 `http://127.0.0.1:26000`。
+- 防火墙放通 **16000**。
 
-> 端口备忘：管理界面 **26000**、HTTP 服务 **16000**、NBD **10809**。
-> 客户端要能访问 16000（iVentoy 用它把 ISO 内容传给客户端），防火墙上要放通。
+## 2. 与第三方 DHCP 共存
 
----
+**先确认对方的 DHCP 会不会响应 PXE 请求**：
 
-## 3. 步骤二：和第三方 DHCP 共存（你环境的关键点）
+- 抓包：同网段 PC 上 Wireshark 过滤 `dhcp`，能看到 Offer 就是响应了。
+- 看客户端屏幕：`PXE-E53` / `No boot filename` / 已拿到 IP → **响应了 PXE**，按下面配；
+  长时间卡在获取 IP 最后 `PXE-E51` → **不响应 PXE**，可当它不存在，直接用 iVentoy 内置 DHCP。
 
-### 3.1 先确认对方的 DHCP 会不会响应 PXE 请求
-
-有些 DHCP 会直接过滤掉 PXE 阶段的请求。判定方法（官方给了两种）：
-
-- **抓包**：客户端同网段 PC 上 Wireshark 过滤 `dhcp`，能看到 DHCP Offer 就是响应了。
-- **看客户端屏幕**：
-  - 打印 `PXE-E53`、`No boot filename` 或已拿到 IP → **响应了 PXE**，需要按下面配。
-  - 长时间卡在获取 IP，最后 `PXE-E51` → **不响应 PXE**，可以当它不存在，直接用 iVentoy 内置 DHCP。
-
-### 3.2 选模式：优先 `ProxyNet`
-
-| 模式 | 适用 | 第三方 DHCP 要改什么 |
+| 模式 | 适用场景 | 第三方 DHCP 要改什么 |
 |---|---|---|
-| **`ProxyNet`** ✅ 推荐 | iVentoy 与 DHCP **在不同机器**，同 VLAN | **什么都不用改** |
-| `Proxy` | iVentoy 与 DHCP 跑在**同一台机器** | 不用改 |
-| `External` | ProxyNet 不满足时 | 配 `next-server`=<iVentoy IP>、`bootfile`=`iventoy_loader_16000` |
-| `ExternalNet` | iVentoy 与 DHCP **跨 VLAN** | 必须能按 DHCP 报文动态下发 bootfile，要求很高 |
+| **`ProxyNet`** ✅ 推荐 | iVentoy 与 DHCP **不同机器**，同 VLAN | **什么都不用改** |
+| `Proxy` | 两者跑在**同一台机器** | 不用改 |
+| `External` | ProxyNet 不满足时 | 配 `next-server`=iVentoy IP、`bootfile`=`iventoy_loader_16000` |
+| `ExternalNet` | 跨 VLAN | 须能按 DHCP 报文动态下发 bootfile，要求很高 |
 
-你的情况（路由器/域控/核心交换机上的 DHCP，iVentoy 另跑一台）= **`ProxyNet`**。
+你的情况（路由器/域控/核心交换机上的 DHCP + iVentoy 另跑一台）= **`ProxyNet`**。
+原理：iVentoy 仍起内部 DHCP，但**不发 IP**，只在 67 / 4011 端口补 `next-server`/`bootfile`，不抢地址池。
 
-原理：ProxyNet 下 iVentoy 仍然起内部 DHCP，但**不发 IP**，只在 67 和 4011 端口补 `next-server`/`bootfile` 选项，所以不会和你的 DHCP 抢地址池。官方明确写"优先使用 ProxyNet 模式"。
+`External` 模式下在 DHCP 上配 `option 066` = iVentoy IP、`option 067` = `iventoy_loader_16000`
+（末尾 `16000` 必须和 HTTP 端口一致；**不要**同时保留别的 067）。此模式无需区分 BIOS/UEFI——
+iVentoy 旁听 DHCP 报文自行判断架构。
 
-操作：`参数配置` → DHCP 服务器模式 → `ProxyNet`。此时主界面的 IP 地址池填不填都不影响客户端拿地址（地址由你的 DHCP 发）。
+> ⚠️ 交换机开了 **DHCP Snooping** 时，要把 iVentoy 所在端口设为 **trusted**，否则 ProxyDHCP 应答被丢弃，
+> 表现为"客户端拿到 IP 但拿不到 bootfile"。
 
-> ⚠️ 如果交换机开了 **DHCP Snooping**，需要把 iVentoy 服务器所在端口设为 **trusted**，否则它的 ProxyDHCP 应答会被丢弃，表现为客户端拿到 IP 但拿不到 bootfile。
+## 3. 界面配置（四个开关）
 
-### 3.3 备选：改用 `External` 模式
+**参数设置**页：
 
-如果 ProxyNet 在你的网络里不通，就走 External，此时在 DHCP 服务器上配：
-
-```
-option 066 (Next Server)  = <iVentoy 服务器 IP>
-option 067 (Bootfile Name) = iventoy_loader_16000
-```
-
-注意末尾的 `16000` 必须和 iVentoy 的 HTTP 端口一致（改了端口这里也要改）。`External` 模式下第三方 DHCP 不需要区分 BIOS/UEFI —— iVentoy 会旁听 DHCP 报文自己判断架构，然后返回正确的启动文件。
-
-Windows Server DHCP 图形界面里就是"作用域选项 → 066 启动服务器主机名 / 067 启动文件名"。**不要**在这台 DHCP 上同时保留别的 067。
-
----
-
-## 4. 步骤三：界面配置（把四个开关打开）
-
-`参数设置` 页：
 - **菜单默认超时时间** = `5`（0 = 永不超时）
 - **DHCP 服务器模式** = `ProxyNet`
-- 勾选 **ByPass HW Check**（跳过 Win11 的 RAM/TPM/SecureBoot/CPU 检查）
-- 勾选 **ByPass NRO**（跳过联网账户要求）
+- 勾选 **ByPass HW Check**、**ByPass NRO**
 
-> ⚠️ **TPM/安全启动绕过不在 `unattend.xml` 里**。勾选框的作用是在 WinPE 里往注册表写
-> `HKLM\SYSTEM\Setup\LabConfig\BypassRAMCheck / BypassTPMCheck / BypassSecureBootCheck / BypassCPUCheck`
-> 和 `HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\OOBE\BypassNRO`。
-> 也就是说：把这份 answer file 拿去走 U 盘安装，或者忘了勾这个框，在不满足硬件要求的机器上
-> Win11 会直接停在"这台电脑不满足运行 Windows 11 的要求"。
->
-> 另外，**本方案不依赖 `Bypass NRO`**：本地账户是通过微软有文档支持的 `UserAccounts` 元素创建的，
-> 所以即使 24H2/25H2 把 `bypassnro` 移除或改掉，装机流程也不会因此断掉。
+> ⚠️ **TPM/安全启动绕过不在 `unattend.xml` 里**。勾选框的作用是在 WinPE 里写
+> `HKLM\SYSTEM\Setup\LabConfig\Bypass*Check` 和 `...\OOBE\BypassNRO`。
+> 拿这份 answer file 走 U 盘安装、或忘了勾，不满足硬件要求的机器会停在"不满足运行 Windows 11 的要求"。
+> 另外**本方案不依赖 `Bypass NRO`**：账户是靠有文档支持的 `AutoLogon`/`UserAccounts` 建的，
+> 即使 24H2/25H2 改掉 `bypassnro` 也不会断。
 
-`镜像管理` 页，选中 Win11 ISO：
+**镜像管理**页，选中 Win11 ISO：
+
 - 点 **设为默认启动文件**
-- 自动安装脚本点 **新增** → 选 `unattend.xml`（位于 `user/scripts/`）
-- 设置 **默认自动脚本编号**（从 1 开始，0 = 不使用自动安装）
-- 设置 **脚本选择超时时间** 为非 0 值
-- ~~设置 **注入文件**~~ —— 当前方案不做文件注入，这一项**留空**
+- 自动安装脚本 **新增** → 选 `unattend.xml`，设置 **默认自动脚本编号**（从 1 开始，0 = 不使用）
+- **脚本选择超时时间** 设为非 0
+- **注入文件留空**（当前方案不做注入）
 
-> 界面上的脚本路径以 UI 实际提示为准（官方示例脚本放在 `user/scripts/example` 下）。
+**Secure Boot（客户端 BIOS 开着时）**——iVentoy 1.0.40+ 支持，**仅 X86_64 客户机**：
 
-### 安全启动（如果客户端 BIOS 开着 Secure Boot）
+| 模式 | 说明 |
+|---|---|
+| `Not Supported` | 兼容性最好，但必须进 BIOS 关掉 Secure Boot ← **批量装机推荐** |
+| `Standard` | 客户端零操作，但中文菜单 / GrubBoot / UEFI 分辨率 / 启动密码全部不可用 |
+| `ByPass` | 功能齐全，每台**首次**需手动导入一次 Key |
 
-iVentoy 1.0.40+ 支持，**仅 X86_64 客户机**，三种模式：
+部分机型 BIOS 还需先使能 UEFI CA。
 
-| 模式 | 优点 | 代价 |
-|---|---|---|
-| `Not Supported` | 兼容性最好 | 必须进 BIOS 关掉 Secure Boot |
-| `Standard` | 客户端零操作 | **中文菜单 / GrubBoot / UEFI 分辨率锁定 / 启动密码 全部不可用** |
-| `ByPass` | 功能齐全 | 每台机器**首次**需手动导入一次 Key |
+## 4. `unattend.xml`
 
-批量装机建议：**先在 BIOS 统一关掉 Secure Boot** 走 `Not Supported`（工位机通常可批量设置），或者接受一次性的 Key 导入走 `ByPass`。部分机型 BIOS 还需先使能 UEFI CA。
-
----
-
-## 5. 步骤四：改 answer file 里的 EDIT ME
-
-### 5.1 `unattend.xml`（搜索 `EDIT ME`）
+### 必改的三处（文件里搜 `EDIT ME`）
 
 | 位置 | 改成 |
 |---|---|
-| `/IMAGE/NAME` 的 `Windows 11 Pro` | 你镜像里**准确的版本名**（见下方"中文 ISO 陷阱"） |
-| `AutoLogon` 的 `<Value>` | Administrator 的密码 |
-| `UserAccounts` 的 `<Value>` | 同上，两处必须一致 |
+| `/IMAGE/NAME` 的 `Windows 11 Pro` | 你镜像里**准确的 Name**（`dism /Get-WimInfo`） |
+| `AutoLogon` 的 `<Value>` | Administrator 密码 |
+| `AdministratorPassword` 的 `<Value>` | 同上，**两处必须完全一致** |
 
-> **"注册给谁"的四个字段已全部删除**（`RegisteredOwner`、`RegisteredOrganization`、
-> `UserData` 里的 `FullName`、`Organization`）。它们只是展示性元数据——`systeminfo`、
-> 注册表 `HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion`、资产清点工具会读，
-> 不影响激活、授权、计算机名或加域。
-> 需要时按 README 里 `unattend.xml` 的注释加回来即可（注意 `FullName` / `Organization`
-> **不支持空值**，要留就必须填内容）。
->
-> ⚠️ **`<AcceptEula>true</AcceptEula>` 绝对不能删** —— 没有它 Setup 会弹出许可条款页面，
-> 全自动流程就断了。
->
-> ⚠️ **`<ProductKey>` 也不能删**。它的官方定义是 "Specifies the Windows image to install during
-> Windows Setup"，既决定装哪个版本，也是**唯一能跳过「产品密钥」页的元素**。
-> 当前填的是微软官方公开的 KMS 客户端通用密钥（Windows 11 Pro，`W269N-...`），
-> 它**只选版本、不具备激活功能**，属于公开信息，放在明文 HTTP 提供的文件里没有泄露风险。
-> 想换成别的版本，改 `<Key>` 即可，XML 注释里列了 Pro / Pro N / Home / Enterprise / Education 五个。
-> 真正的激活仍然靠 KMS / ADBA / 数字许可证。
->
-> **千万不要把真实的 MAK 零售密钥填进去** —— 那才是有泄露风险的。
+**不能删的两个元素**：
 
-**镜像选择是最容易踩坑的一步，务必看完。**
+- `<AcceptEula>true</AcceptEula>` —— 没有它 Setup 会弹许可条款页，全自动就断了。
+- `<ProductKey>` —— 官方定义是"指定要安装的 Windows 映像"，既决定装哪个版本，也是**唯一能跳过「产品密钥」页的元素**。当前填的是微软公开的 KMS 客户端通用密钥（只选版本、不激活），属公开信息。**千万不要填真实 MAK 零售密钥**，那才有泄露风险。真正的激活仍靠 KMS / ADBA / 数字许可证。
 
-我们前后用过两张官方镜像，`NAME` 完全不同，可以说明这一步不能想当然：
+"注册给谁"的四个字段（`RegisteredOwner`、`RegisteredOrganization`、`UserData` 的 `FullName`/`Organization`）
+已全部删除——它们只是展示性元数据，不影响激活、授权、计算机名或加域。
 
-| 镜像 | 实际 NAME | EDITIONID | 映像数 |
-|---|---|---|---|
-| `Win11_25H2_Pro_Chinese_Simplified_x64_v2.iso` | `Windows 11 Pro China Only` | `ProfessionalCountrySpecific` | 1 |
-| `zh-cn_windows_11_consumer_editions_version_25h2_updated_sep_2026_x64_dvd_*.iso` | `Windows 11 Pro` | `Professional` | 6 |
+### 镜像选择：用 NAME，不要用 INDEX
 
-**当前线上用的是第二张**（consumer 多版本镜像），所以 `/IMAGE/NAME` 填 `Windows 11 Pro`。
-
-### 为什么用 NAME 而不是 INDEX
-
-**因为 NAME 写错会"大声失败"，INDEX 写错会"静默装错版本"。**
-
-多版本 ISO 的索引是致命陷阱，这张 consumer 镜像的真实列表是：
+**NAME 写错会"大声失败"，INDEX 写错会"静默装错版本"。** 当前 consumer 镜像的真实列表：
 
 ```
-索引 1 | Windows 11 Home                  EDITIONID=Core          ← 家庭版！
-索引 2 | Windows 11 Home Single Language
-索引 3 | Windows 11 Education
-索引 4 | Windows 11 Pro                   EDITIONID=Professional  ← 专业版
-索引 5 | Windows 11 Pro Education
-索引 6 | Windows 11 Pro for Workstations
+1 | Windows 11 Home                ← 家庭版！
+2 | Windows 11 Home Single Language
+3 | Windows 11 Education
+4 | Windows 11 Pro                 ← 专业版
+5 | Windows 11 Pro Education
+6 | Windows 11 Pro for Workstations
 ```
 
-**索引 1 是家庭版，不是专业版。** 写死 `INDEX=1` 会一路"成功"地把家庭版装上去，且和 ProductKey 里的专业版密钥互相矛盾——**它不会报错，只会装错**。所以本项目坚持用 `NAME`。
+写死 `INDEX=1` 会一路"成功"地装上家庭版，还与 ProductKey 的专业版密钥矛盾——**它不报错，只装错**。
 
-### 换 ISO 时怎么确认
+换 ISO 时这样确认：
 
 ```cmd
-dism /Get-WimInfo /WimFile:D:\sources\install.wim
+dism /Get-WimInfo /WimFile:D:\sources\install.wim      :: 没有 wim 就用 install.esd
 ```
 
-（`install.wim` 不存在就换成 `install.esd`）
+取输出的 **「名称 / Name」** 原样填入。注意：
 
-取输出里的 **「名称 / Name」**，原样填到 `/IMAGE/NAME` 的 `<Value>`。注意：
+- 要的是 **Name**，不是安装界面显示的 DISPLAYNAME（consumer 镜像上是「Windows 11 专业版」）
+- 非英文介质上 Name **可能**被本地化（China Only 那张就是），必须照抄
+- 一旦该值含中文，`unattend.xml` 必须存成 **UTF-8 带 BOM**（本文件已经是）
 
-- 要的是 **Name**，不是安装界面显示的 **DISPLAYNAME**（consumer 镜像上是中文的「Windows 11 专业版」）
-- 非英文介质上 Name **可能**被本地化（China Only 那张就是），所以必须照抄，不能凭感觉写 `Windows 11 Pro`
-- 一旦这个值含中文，`unattend.xml` 必须存为 **UTF-8 带 BOM**（本文件已经是）
+### 分区与选盘
 
-**分区布局**：默认是 `EFI 300MB + MSR 16MB + Windows(占满剩余)` 三分区。
-- 为什么这样最稳：`<Extend>true</Extend>` 的分区必须**最后创建**，所以 OS 分区放最后；不建独立恢复分区，WinRE 落在 `C:\Windows` 里，也顺带避开了 Windows 11 25H2/26H2 把恢复分区切成 500MB 后累积更新报 `0x80070643` 的老问题。
-- 如果你想要独立 1GB WinRE 分区：`unattend.xml` 里有一段注释掉的备用 `<DiskConfiguration>`，整块替换，并把 `<InstallTo><PartitionID>` 从 `3` 改成 `4`。要点是恢复分区必须在**最前面**（用 `TypeID de94bba4-06d1-4d40-a16a-bfd50179d6ac`），Windows 分区才能继续 `Extend` 吃满剩余空间。
+默认布局：`EFI 300MB + MSR 16MB + Windows(占满剩余)`。
+`<Extend>true</Extend>` 的分区必须**最后创建**，所以 OS 分区放最后；不建独立恢复分区，
+WinRE 落在 `C:\Windows`，顺带避开 25H2/26H2 把恢复分区切成 500MB 后累积更新报 `0x80070643` 的老问题。
+（想要独立 1GB WinRE 分区：文件里有一段注释掉的备用 `<DiskConfiguration>`，整块替换并把
+`<InstallTo><PartitionID>` 从 `3` 改成 `4`；要点是恢复分区必须在**最前面**。）
 
-**自动分区 + 自动选盘**：分区本身是 `unattend.xml` 里的 `<DiskConfiguration>` 全自动完成的（擦盘 → 建 GPT → 格式化 → 装 WIM，全程无提示）。选哪块盘由 iVentoy 变量决定，当前用的是**容量最接近 200GB 的那块盘**：
+选盘由 iVentoy 变量决定，当前用**容量最接近 200GB 的那块盘**，在
+`<DiskConfiguration><Disk><DiskID>` 和 `<InstallTo><DiskID>` 两处都写，同机两次展开一致：
 
 ```xml
 <DiskID>$$VT_WINDOWS_DISK_CLOSEST_200$$</DiskID>
 ```
 
-这个变量在 `<DiskConfiguration><Disk><DiskID>` 和 `<InstallTo><DiskID>` 两处都写了，同一台客户机上两次展开结果一致，所以不会错位。
-
-可替换的三种选盘策略（官方变量表，**只能用于 Windows unattend.xml**）：
+可替换策略（**只能用于 Windows unattend.xml，且只能用一个，没有"或"逻辑**）：
 
 | 变量 | 选中的盘 |
 |---|---|
-| `$$VT_WINDOWS_DISK_CLOSEST_200$$` | 容量最接近 200GB 的盘 ← **当前使用** |
+| `$$VT_WINDOWS_DISK_CLOSEST_200$$` | 容量最接近 200GB ← **当前使用**（`XXX` 可换成任意数值） |
 | `$$VT_WINDOWS_DISK_1ST_NONUSB$$` | 第一个非 USB 盘 |
 | `$$VT_WINDOWS_DISK_MAX_SIZE$$` | 容量最大的盘 |
 
-`XXX` 可以换成任意数值，比如 `$$VT_WINDOWS_DISK_CLOSEST_500$$`。**注意只能用一个，没有"或"逻辑。**
-
-> ⚠️ **两个必须知道的坑**
+> ⚠️ **两个坑**
 >
-> **1. `_CLOSEST_` / `_MAX_SIZE` 不排除 USB 盘。** 官方变量表里只有 `_1ST_NONUSB` 明确写了"非 USB"。
-> 也就是说，如果机器上插着一块大容量 U 盘或移动固态，它参与容量比较并可能胜出，然后被**擦掉**。
+> **1. `_CLOSEST_` / `_MAX_SIZE` 不排除 USB 盘。** 插着的大容量 U 盘或移动固态可能胜出，然后**被擦掉**。
 > **装机时务必拔掉所有可移动存储。**
 >
-> **2. 比较的是 Windows 报出来的容量，即 GiB 但显示成 GB。** 标称 200GB 的盘在 diskpart 里显示约 `186 GB`，
-> 标称 256GB 的约 `238 GB`。填 200 仍然能正确区分这两者（`|186-200| = 14` 比 `|238-200| = 38` 更近），
-> 所以不用把 200 改成 186。但如果你的机器上同时存在标称 200GB 和 240GB 的盘，两者都离 200 不远，
-> 建议先在一台机器上确认实际数值再决定填多少。
+> **2. 比较的是 Windows 报出来的容量**：GiB 但显示成 GB。标称 200GB 的盘显示约 `186 GB`，256GB 的约 `238 GB`。
+> 填 200 仍能区分两者（`|186-200|=14` 比 `|238-200|=38` 更近），不用改成 186。
+> 但若机器上同时有标称 200GB 和 240GB 的盘，建议先在一台机器上确认实际值再定。
 >
-> **怎么确认真实数值**：本方案不做文件注入，所以没有 `X:\VentoyAutoRun.log` 可看。
-> 直接看 iVentoy 主界面的**设备列表**（会显示每台客户端的磁盘信息），或者最快的方式——
-> 在 Windows 安装界面按 `Shift+F10` 调出 cmd，敲：
->
+> 怎么确认：iVentoy 主界面**设备列表**会显示客户端磁盘信息；或在安装界面按 `Shift+F10` 调出 cmd：
 > ```
 > diskpart
 > list disk
 > exit
 > ```
->
-> 每块盘的准确 GB 数和磁盘号一目了然，据此把 `_CLOSEST_XXX` 调到你要的值。
-> 建议在第一台真机上把这一步固化进验收流程。
+> 建议把这一步固化进第一台真机的验收流程。
 
-**擦盘保护**：`<WillWipeDisk>true</WillWipeDisk>` 不可逆。选盘为什么不写死 `DiskID=0`——多控制器服务器上枚举顺序和你以为的不一样，写死 0 很可能擦错盘。用"最接近 200GB"这种**按属性选**的方式，换固件、换控制器、换机型都不需要改 answer file。**首次测试请物理拔掉所有数据盘。**
+**擦盘保护**：`<WillWipeDisk>true</WillWipeDisk>` **不可逆**。不写死 `DiskID=0` 是因为多控制器
+服务器上枚举顺序和你想的不一样，写死 0 很可能擦错盘；按"最接近 200GB"这种**属性**选盘，
+换固件、换控制器、换机型都不用改 answer file。**首次测试请物理拔掉所有数据盘。**
 
 ### ⚠️ 改完 `unattend.xml` 必须重启 iVentoy
 
-**iVentoy 把自动安装脚本的内容缓存在内存里，只在服务启动时读一次。**
-之后你在磁盘上怎么改它都不看——文件是新的，下发出去的却是旧的。
+**iVentoy 把自动安装脚本缓存在内存里，只在服务启动时读一次。** 之后你怎么改磁盘上的文件它都不看——
+文件是新的，下发的却是旧的。**可怕之处是它不报错**：装机一切正常，只是改动完全没生效。
 
-**这个坑的可怕之处是它不报错**：装机一切正常，只是脚本里的改动完全没生效。
+实证（客户端回传的 `ventoy.log`）：磁盘上是 `25353` 字节，客户端却收到 `21290` 字节（改动前的大小）。
 
-**实证**（客户端自己上传回来的 `ventoy.log`）：
+正确做法：① 改文件 → ② **重启 iVentoy**（或界面里把该脚本**删除**再**重新新增**，并把默认编号/超时设回去）
+→ ③ 客户端重新 PXE 引导 → ④ 按开头那条 `len:` 校验下发的是哪一版。
 
+### 为什么直接用内置 Administrator
+
+- **真正启用该账户的是 `AutoLogon` 的 `Username=Administrator`**；`AdministratorPassword` 只负责设密码。
+  两者分工不同，缺一不可（Microsoft 文档《AdministratorPassword》原文如此）。
+- `AutoLogon` 会让 OOBE **跳过账户创建阶段**；文档要求用 AutoLogon 时**必须**指定 `LogonCount`（当前 `1`）。
+- ⚠️ **不要额外显式启用内置 Administrator**（别加 `net user Administrator /active:yes`）。文档警告
+  "Doing so can prevent the image or device from entering the OOBE successfully"。本文件曾有一条
+  `RunSynchronous` 干这事，已按文档删除。
+- 官方还建议在这种场景额外创建一个 Administrators 组成员账户以便后续管理。本方案没建——
+  内置 Administrator 本身就是管理员，可管理性没问题，但确实偏离官方建议。想照做就把 `LocalAccounts` 块加回来。
+
+## 5. 首次登录装驱动
+
+`unattend.xml` 的 `FirstLogonCommands` 在首次登录时做两件事：
+
+1. 从 iVentoy 服务器下载 `install-drivers.cmd`
+2. 执行它，并传入清单和 tool 目录的 URL
+
+命令带 **`--retry 20 --retry-delay 10 --retry-connrefused --retry-all-errors`**：首次登录那一刻网络
+可能还没就绪，裸 curl 会静默失败，而重试逻辑本来写在脚本里——脚本恰恰是这一步要下载的东西，永远生效不了。
+脚本缺失时改写 `C:\Windows\Temp\install-drivers-failed.txt` 留面包屑，不再无声失败。
+
+**为什么用 `FirstLogonCommands` 而不是 `$OEM$\SetupComplete.cmd`**：微软文档写明后者
+"This setting is disabled when using OEM product keys, except on Enterprise editions"——
+OEM 品牌机（固件带密钥）上会被**直接跳过**，而目标机大概率正是这类机器。
+权限方面文档保证"管理员首次登录时这些命令以 **elevated** 运行"，我们用 Administrator 自动登录，天然满足。
+
+**服务器侧准备**（放进 `<iVentoy>\user\deploy\`）：
+
+| 文件 | 说明 |
+|---|---|
+| `install-drivers.cmd` | 本仓库提供，原样复制 |
+| `tool_files.txt` | 本仓库提供，原样复制（清单，**114 项**） |
+| `tool\` | 整个工具文件夹，**约 999 MB** |
+
+客户端把整棵树还原到 **`C:\tool\`**，然后执行 `C:\tool\Drvceo_Win10_Win11_x64_Lite\start.bat`
+（内容 `.\DrvCeo.exe /a`，`/a` 是官方参数：自动检测并安装驱动）。
+`.\DrvCeo.exe` 是相对路径，所以**工作目录必须是它所在文件夹**，脚本用 `start /D` 保证；
+你手动跑也要先 `cd` 进去。
+
+**为什么逐文件下载**：iVentoy 的 HTTP 是静态文件服务，**只能按文件取，不能取目录，也没有目录列表**。
+所以清单在服务器侧预先列好，脚本按清单拉回来并保持目录结构。
+
+⚠️ **清单只允许 ASCII 路径**（约定 `^[A-Za-z0-9._/\-]+$`）。iVentoy 的 HTTP **本身支持中文路径**
+（实测百分号编码返回 206），障碍在**客户端的 cmd.exe 按 OEM 代码页解析清单**——中文/空格会变成
+乱码文件名甚至下载失败。要创建中文名就得把清单存成 GBK，等于把"编码问题"从消除变成管理；
+本项目已因编码翻过两次车（`%date%` 乱码、多字节注释破坏 `goto`），所以选择统一 ASCII 命名。
+**以后再往里放文件，文件名直接用 ASCII**，否则不会进清单、也就到不了客户机。
+
+⚠️ **只要增删了 `tool` 里的任何文件（包括新增 `start.bat`）就必须重新生成清单**，
+否则客户端漏文件（日志打印 `MISSING or EMPTY`），418MB 的 `QiAnXing-Tianqing-*.exe` 曾因此漏传。
+生成命令见 `user/deploy/README.md`（结果必须是 ASCII + CRLF）。
+
+**驱动总裁的三个注意点**：
+
+1. **客户机必须能上公网**。当前驱动包只有主程序和 `Res\`，**没有离线驱动库**（`Res\Config.ini` 写着
+   `type=Lite2` 但同目录已无 `Win10x64\`），它会去 `drvceoup.sysceo.cn` 联网取驱动；只通局域网就会失败。
+2. **可能被改浏览器主页**。**量产前务必在一台机器上验证**主页和默认搜索。
+3. **企业合规**：对驱动版本有要求时，建议改用厂商驱动包 + `pnputil` 推，而不是让它自己联网挑。
+
+想全自动（静默）：**别用社区传的 `/S`，用官方参数**——`-a` 自动安装、`-d` 装完删除自身及离线包、
+`-stopbs` 过滤显卡/USB3.X/磁盘控制器、`-noauto` 部署环境不自动装、`-PeLoad` PE 下静默加载
+（详见包内 `Res\Cmdline\zh_cn.txt`）。更彻底的是 `Drvceo.ini` 的 `[DrvCeoSet]`：
+
+```ini
+Silence=on           ; 全静默，隐藏窗体（无人值守关键开关）
+Time=30              ; 自动安装倒计时秒数
+DesktopRestart=on    ; 装完自动重启
+Dupdrv=off           ; 关闭部署后首次进桌面触发联网更新
+ToolUpdate=off       ; 不检测程序更新
 ```
-[2026/09/20 00:34:31] SaveBuffer2File <ventoy\autoinstall_1> len:21290
-```
 
-磁盘上的文件是 `25353` 字节、客户端却收到 `21290` 字节——后者正是改动前的大小。
+`Drvceo.ini` 官方要求 **ANSI 编码**。注意若它装完自动重启，`LogonCount=1` 会让机器停在锁屏。
 
-**正确做法**：
+## 6. 缺驱动补救（备用）
 
-1. 改完 `<iVentoy>\user\scripts\unattend.xml`
-2. **重启 iVentoy**（关掉 `iVentoy_64.exe` 再启动）
-   - 或者在 `镜像管理` 里把该脚本**删除**再**重新新增**，并把默认编号/超时设回去
-3. 客户端重新 PXE 引导
+> 当前方案**不做文件注入**（`unattend.xml` 里没有 `PnpCustomizationsWinPE`，界面「注入文件」留空），
+> 完全依赖 ISO 内 `boot.wim` 自带的网卡驱动。本节是**逃生路线**。
 
-**怎么确认下发的是哪一版**（不用进虚拟机）：
-客户端每次引导后会把日志回传到 `<iVentoy>\log\client\<客户端IP>.zip`，
-解开看 `client_info\ventoy.log` 里的这一行：
+报"缺少计算机所需的介质驱动程序"时，缺的**不是硬盘驱动，是网卡驱动**——WinPE 挂不到 ISO 源。
+⚠️ **Hyper-V 测不出来**（虚拟网卡驱动是 `boot.wim` 自带的），只有真机会遇到，且机型差异很大。
 
-```
-SaveBuffer2File <ventoy\autoinstall_1> len:<字节数>
-```
+三步恢复：
 
-**`<字节数>` 必须等于你磁盘上 `unattend.xml` 的大小。**
+1. 把 `Microsoft-Windows-PnpCustomizationsWinPE` 组件加回 `unattend.xml`（放在 `windowsPE` 阶段、
+   `Microsoft-Windows-Setup` 之前），`DriverPaths` 指向 `X:\drivers`。
+2. 打注入包：注入负载已从仓库删除，先取回（见 [遗留问题](#11-遗留问题) 里的 git 命令），
+   把 `VentoyAutoRun.bat` 和 `drivers\` 打成**一个** `.7z`，在镜像管理里设为该 ISO 的注入文件。
+   `drivers\` **即使为空也要留在包里**——路径必须存在。
+3. 收集驱动（要解压成 `.inf` 结构，不是厂商 `.exe` 安装包）：Intel 网卡完整包、Broadcom NetXtreme、
+   Mellanox WinOF-2、Realtek `rt640x64.inf`、Marvell/Aquantia `aqnic`。
 
-### 5.2 为什么直接用内置 Administrator（文档依据）
+现场定位：按 `Shift+F10` 执行 `ipconfig /all`。看不到与 iVentoy 页面对应的网卡 → 就是缺网卡驱动；
+能看到网卡但仍报错 → `type X:\Windows\System32\ventoy\vtoype.log` 发作者。
 
-本方案不创建自建账户，直接启用并使用内置 Administrator。这不是猜的，微软文档写得很明确：
+## 7. 单机验收
 
-- **[AdministratorPassword](https://learn.microsoft.com/en-us/windows-hardware/customize/desktop/unattend/microsoft-windows-shell-setup-useraccounts-administratorpassword)**：
-  > "By default, the built-in administrator account is disabled in all default clean installations.
-  > You can enable the built-in administrator account during unattended installations,
-  > **by setting the AutoLogon/Username to Administrator**. This enables the built-in administrator
-  > account, even if a password is not specified in the AdministratorPassword setting."
+**必做，不要直接批量。** 找一台和量产机同型号的机器，物理断开其他硬盘：
 
-  即：**真正启用该账户的是 `AutoLogon` 的 `Username=Administrator`**，
-  `AdministratorPassword` 只负责设密码。两者分工不同，缺一不可。
+1. BIOS 确认：**UEFI 模式**、CSM/Legacy 关闭、Secure Boot 按第 3 节决定。
+2. 客户端 PXE 启动，观察：拿到 IP → 出现菜单 → 5 秒后自动进 Win11 ISO。
+   菜单不走 = 超时没设或为 0；停在"选自动安装脚本" = 脚本选择超时为 0。
+3. 分区阶段应**无提示直接开始**。弹出分区界面 = `unattend.xml` 没生效（查路径 / 默认脚本编号 / 是否在 `user/scripts`）。
+   报 answer file 解析失败时**优先怀疑 `$$VT_...$$` 没被替换**——iVentoy 只在**被当作自动安装脚本**处理的文件上做变量扩展，
+   所以通常是路径/编号没配对，而不是变量语法写错。HTTP 直接下 `user/scripts/unattend.xml` 拿到的是**未展开**原文，不能用来验证。
+4. 装完自动登录进桌面即结束（无后置脚本，不会再自动重启）。
 
-- **[AutoLogon](https://learn.microsoft.com/en-us/windows-hardware/customize/desktop/unattend/microsoft-windows-shell-setup-autologon)**：
-  > "In Windows 10, if you configure AutoLogon, the OS will **skip the user account creation phase during OOBE**."
+| 检查项 | 命令 / 位置 |
+|---|---|
+| 分区是 GPT + EFI + MSR | 磁盘管理，或 `diskpart` → `list partition` |
+| 装到了预期的盘 | `Shift+F10` → `diskpart` → `list disk` 核对容量与磁盘号 |
+| Windows 版本正确 | `winver` 或 `dism /online /get-currentedition` |
+| 内置 Administrator 已启用 | `net user Administrator`（"帐户启用"是 Yes） |
+| 密码可登录 / 自动登录生效 | 注销后用密码登录；再重启一次，应无需输密码进桌面 |
+| 系统语言/区域是中文 | 设置 → 时间和语言 |
+| 中文注释没弄坏 answer file | 全程没出现"无法分析或处理无人参与应答文件" |
+| 首次登录拉起驱动总裁 | 登录后自动弹出界面；日志 `C:\Windows\Temp\install-drivers.log` |
+| 驱动装完无副作用 | 检查浏览器主页 / 默认搜索（见第 5 节） |
 
-  这正是我们要的效果。同页还规定 **"LogonCount must be specified if AutoLogon is used"**，
-  所以 `LogonCount` 不能省。
+> 计算机名是 `DESKTOP-XXXXXXX` 这类随机名，属预期行为不是故障（见 [已知缺口](#已知缺口)）。
+> 单机跑通后再逐步放开并发，注意免费版上限。
 
-⚠️ **不要额外去显式启用内置 Administrator**。同一份文档警告：
+### 已知缺口
 
-> "It is not necessary to explicitly enable the built-in Administrator account ... 
-> **Doing so can prevent the image or device from entering the Out-Of-Box Experience (OOBE) successfully.**"
-
-也就是说，**别再加 `net user Administrator /active:yes` 这类步骤**。本 answer file 曾经加过一条
-`Microsoft-Windows-Deployment` 的 `RunSynchronous` 做这件事，已按文档删除。
-
-⚠️ 还有一条**官方建议我们没有照做**，知悉即可：同一篇《AutoLogon》建议在这种场景下
-（用内置或既有账户自动登录）**再用 unattend 至少创建一个 Administrators 组成员账户**，
-以便自动登录结束后设备仍可管理。本方案没有自建账户——内置 Administrator 本身就是管理员，
-可管理性没问题，但这确实偏离了官方建议。想照做就把 `LocalAccounts` 块加回来。
-
-### 5.3 已知缺口（现阶段没做的部分）
-
-删掉后置脚本后，下面这些**不会自动完成**。装机前请确认你能接受：
+后置脚本删除后，下面这些**不会自动完成**：
 
 | 能力 | 现状 | 影响 |
 |---|---|---|
-| **自动命名** | ❌ 没有 | `unattend.xml` 不设 `<ComputerName>`，Windows 自己生成 `DESKTOP-XXXXXXX` 之类的随机名。想按序列号/MAC 命名必须加后置脚本 |
-| **加入域** | ❌ 没有 | 装完是工作组机器，需手动加域 |
-| **打驱动** | ⚠️ 半自动 | 首次登录会自动弹出驱动总裁，但**需要人工确认**（见 5.4 节）。要全自动得改成 `/S` 静默 |
-| **装软件** | ❌ 没有 | 只能手动装，或用其它手段（组策略、SCCM、Intune）在加域后推 |
-| **关闭自动登录** | ❌ 没有 | 自动登录保持开启，`Winlogon\DefaultPassword` 里明文存着 Administrator 的密码 |
-| 全自动装完 Win11 + 启用 Administrator + 自动登录 | ✅ 有 | 装完即自动登录进桌面 |
-| 首次登录自动拉起驱动总裁 | ✅ 有 | 但保留图形界面，由现场人员确认后安装 |
+| 自动命名 | ❌ | 不设 `<ComputerName>`，Windows 生成随机名 |
+| 加入域 | ❌ | 装完是工作组机器 |
+| 打驱动 | ⚠️ 半自动 | 自动弹出驱动总裁，但需人工确认 |
+| 装软件 | ❌ | 手动装，或加域后用组策略 / SCCM / Intune 推 |
+| 关闭自动登录 | ❌ | `Winlogon\DefaultPassword` 里明文存着密码 |
+| 全自动装完 Win11 + 启用 Administrator + 自动登录 | ✅ | 装完即进桌面 |
+| 首次登录拉起驱动总裁 | ✅ | 保留图形界面 |
 
-**为什么不设 `ComputerName`**：写死一个固定名字会让所有机器同名，在同网段或同域里直接冲突。而用 iVentoy 的 MAC 变量也拼不出合法名字——Windows 计算机名最长 15 字符，带连字符的 MAC 本身就有 17 字符。
+**为什么不设 `ComputerName`**：写死会让所有机器同名、同网段直接冲突；用 iVentoy 的 MAC 变量也拼不出合法名——
+Windows 计算机名最长 15 字符，带连字符的 MAC 本身 17 字符。
 
-**以后想加回后置自动化**：脚本已从仓库删除，但完整内容在 git 历史里，可以取回：
+**想加回后置自动化**：脚本在 git 历史里，可取回并从已跟踪文件移除：
 
 ```bash
 git show 948160a:user/deploy/deploy.ps1          > deploy.ps1
 git show 948160a:user/injection/VentoyAutoRun.bat > VentoyAutoRun.bat
 ```
 
-同时需要改回 `unattend.xml` 两处：
-1. 加回 `FirstLogonCommands` 钩子（同样在 `git show 948160a:unattend.xml` 里）；
-2. 把 `<LogonCount>` 从 `1` 调回 `3`——因为那个脚本结尾会重启，1 次自动登录不够，第二次开机会停在锁屏。
+同时改回 `unattend.xml` 两处：① 加回 `FirstLogonCommands` 钩子（内容同上 git 命令）；
+② 把 `<LogonCount>` 从 `1` 调回 `3`——那个脚本结尾会重启，1 次自动登录不够，第二次开机会停在锁屏。
 
-第 6 节的缺驱动补救方案同理，需要重新做注入包。
+## 8. 批量与授权
 
----
+- **免费版最多 20 个客户端**：依据是主界面 `设备列表` 的设备数，到 20 后不再服务新客户端。
+  绕过方式只有"关掉重开 + 换 IP 池"。**禁止商用**，批量生产要买专业版。
+- **专业版 299 元**（大版本一次性，1.x 内有效）：客户端数无限制、可商用。License 绑**服务端母机**
+  机器码（最多 2 个，绑定后不可解绑），客户机数量不受限。建议先用免费版跑通再绑机器码。
+- 并发时单台服务器同时供 ISO / HTTP / SMB，网卡和磁盘 IO 是瓶颈；建议与客户机之间走千兆以上、别跨 WAN。
 
-### 5.4 装完自动装驱动（首次登录钩子）
+## 9. 安全（必读）
 
-`unattend.xml` 的 `FirstLogonCommands` 在**首次登录时**自动做两件事：
+有凭据**明文经过网络**：`unattend.xml` 里的 Administrator 密码（当前 `root123`）明文写在文件里，
+且 iVentoy 的 HTTP 把 `user/` 直接对外开放（`http://<IP>:16000/user/...`），同网段 `curl` 就能拿到。
 
-1. 从 iVentoy 服务器下载 `install-drivers.cmd`
-2. 执行它，并把驱动总裁安装包的地址传进去
+⚠️ **当前配置是本方案安全性最差的一档**：内置 Administrator（攻击者第一个尝试的账户名）
++ 自动登录（无需输密码就进桌面）+ 弱密码 `root123`，而且仓库**公开**，密码直接写在公网可见的文件里。
+**仅适合实验环境**，任何真实部署前至少要改密码，并考虑关掉自动登录。
 
-小脚本再去下载安装包并**弹出图形界面**，由现场人员确认后安装——**不加 `/S`，所以不是全自动**。
+缓解：装机期间用独立 VLAN / 临时交换机并装完拔线；把密码当一次性口令，量产完统一改密；
+**别把真实密码提交进 git**（`.gitignore` 里预留了本地覆盖文件）；26000 不要暴露到非装机网段。
+未来若要加回自动加域，更彻底的做法是**离线加域**（`djoin` 生成 blob + `Microsoft-Windows-UnattendedJoin`），
+完全不传凭据，代价是每台机器要先预生成 blob。
 
-**为什么用 `FirstLogonCommands` 而不是 `$OEM$\SetupComplete.cmd`**
-
-微软文档对 `SetupComplete.cmd` 写了一句关键限制：
-
-> This setting is **disabled when using OEM product keys**,
-> except on Enterprise editions and Windows Server operating systems.
-
-OEM 品牌机（固件里带密钥的那种）上它会被**直接跳过**，而目标机大概率正是这类机器，所以那条路不可靠。
-
-**权限为什么没问题**
-
-文档明确说明：
-
-> When a user with administrative privileges logs in for the first time,
-> these commands are run with **elevated access privileges**.
-
-我们用 Administrator 自动登录，天然满足。
-
-**你需要准备什么**
-
-放进 `<iVentoy 解压目录>\user\deploy\`：
-
-| 文件 | 来源 |
-|---|---|
-| `install-drivers.cmd` | 本仓库提供，原样复制 |
-| `tool_files.txt` | 本仓库提供，原样复制（文件清单，112 行） |
-| `tool\` | 整个工具文件夹（约 599 MB） |
-
-客户端把这棵树还原到 `C:\tool\`，然后执行
-`C:\tool\Drvceo_Win10_Win11_x64_Lite\start.bat`（内容是 `DrvCeo.exe /a`）。
-
-**为什么是逐文件下载**：iVentoy 的 HTTP 是静态文件服务，**只能按文件取，不能取目录，也没有目录列表**。
-所以清单在服务器侧预先列好，脚本按清单一个个拉回来、保持目录结构，最终还原到客户机的 `C:\DrvCeo\`。
-
-⚠️ **清单里只允许 ASCII 路径**。iVentoy 的 HTTP 本身支持中文路径（实测百分号编码返回 206），
-但**客户端的 cmd.exe 按 OEM 代码页解析清单**，中文/空格会变成乱码文件名甚至下载失败。
-所以约定：**`tool` 里的文件名一律用 ASCII**。原本有 2 个不符合的已改名，现在 **114 个文件全部在清单里**。
-
-⚠️ **只要增删了 `tool` 里的文件（包括新增 `start.bat`）就必须重新生成清单**，
-否则客户端会漏文件（日志会打印 `MISSING or EMPTY`）。生成命令和全部细节见
-`user/deploy/README.md`。
-
-**子元素顺序**（按微软文档）：
-
-`CommandLine` → `Description` → `Order` → `RequiresUserInput`。顺序写错会导致 answer file 解析失败。
-
-#### 想改成全自动（静默）
-
-**别用社区传的 `/S`，用官方参数。** 官方说明就在驱动包内 `Res\Cmdline\zh_cn.txt`：
-
-| 参数 | 作用 |
-|---|---|
-| `-a` | 自动检测并安装驱动（**部署环境无需加参数将自动安装**） |
-| `-d` | 部署环境删除驱动总裁本身及离线驱动包 |
-| `-stopbs` | 过滤显卡、USB3.X、磁盘控制器驱动 |
-| `-noauto` | 部署环境不自动安装驱动 |
-| `-PeLoad` | PE 环境下静默加载驱动到目标系统 |
-
-更彻底的是配置文件 `Drvceo.ini` 的 `[DrvCeoSet]` 节：
-
-```ini
-Silence=on           ; 全静默自动安装驱动，隐藏软件窗体（无人值守的关键开关）
-Time=30              ; 自动安装倒计时秒数，默认 15
-DesktopRestart=on    ; 桌面环境装完自动重启
-Dupdrv=off           ; 关闭"部署后首次进桌面触发联网更新驱动"
-ToolUpdate=off       ; 不检测程序更新
-```
-
-注意 `Drvceo.ini` 官方要求是 **ANSI 编码**，别存成 UTF-8。
-
-改成静默后还要注意：若它装完自动重启，`LogonCount=1` 会让机器停在锁屏（那时活已经干完，倒也未尝不可）。
-
-#### 三个必须注意的点
-
-1. **客户机必须能上公网**。当前这个驱动包**只有主程序和 `Res\`，没有离线驱动库**（`Res\Config.ini` 写着 `type=Lite2`，但同目录已无 `Win10x64\`），所以它会联网去 `drvceoup.sysceo.cn` 取驱动。只通局域网、不通公网就会失败（脚本日志里能看到）。
-2. **可能被改浏览器主页**。论坛帖里就有人直接问"那你这个搞完还会改主页吗"。**量产前务必在一台机器上验证**浏览器主页和默认搜索有没有被改。
-3. **企业合规**：如果对驱动版本有要求，建议改用厂商驱动包 + `pnputil` 推，而不是让它自己联网挑（参考第 6 节的做法）。
-
-#### 排查
-
-客户机上：
-
-```
-C:\Windows\Temp\install-drivers.log      ← 脚本日志
-C:\Windows\Temp\install-drivers.cmd      ← 脚本本体，可手动重跑
-```
-
-手动重跑：
-
-```cmd
-C:\Windows\Temp\install-drivers.cmd http://<服务器IP>:16000/user/deploy/DrvCeoSetup.exe
-```
-
-浏览器里直接打开那个 URL，也能验证 iVentoy 是否正常提供文件。
-
----
-
-## 6. 步骤五：缺驱动的补救方案（**当前不做，备用**）
-
-> **当前方案已明确不使用文件注入**：`unattend.xml` 里没有 `Microsoft-Windows-PnpCustomizationsWinPE` 组件，
-> iVentoy 界面的「注入文件」也留空。装机完全依赖 ISO 内 `boot.wim` 自带的网卡驱动。
->
-> 本节保留为**逃生路线**：真机万一撞上"缺少驱动"，照这里做即可恢复，不需要重新设计流程。
-
-### 6.1 为什么会有这个报错
-
-iVentoy 通过 PXE 启动后，要在 WinPE 里用**网卡驱动**把服务器上的 ISO 挂成本地盘再跑 `setup.exe`。`boot.wim` 里没有你这台机器网卡的驱动，就会弹"缺少计算机所需的介质驱动程序"——**那不是缺硬盘驱动，是缺网卡驱动 + 挂不到 ISO 源**。
-
-⚠️ **在 Hyper-V 上测不出这个问题**：Hyper-V 虚拟网卡的驱动是 `boot.wim` 自带的，无论做不做注入都能装成功。**必须上真机才能验证**，而且不同机型的网卡型号差异很大。
-
-### 6.2 万一撞上了，三步恢复
-
-1. **把组件加回 `unattend.xml`**（放在 `windowsPE` 阶段、`Microsoft-Windows-Setup` 之前）：
-
-   ```xml
-   <component name="Microsoft-Windows-PnpCustomizationsWinPE"
-              processorArchitecture="amd64"
-              publicKeyToken="31bf3856ad364e35"
-              language="neutral"
-              versionScope="nonSxS"
-              xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State"
-              xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
-     <DriverPaths>
-       <PathAndCredentials wcm:action="add" wcm:keyValue="1">
-         <Path>X:\drivers</Path>
-       </PathAndCredentials>
-     </DriverPaths>
-   </component>
-   ```
-
-2. **打注入包**：注入负载的文件已从仓库删除，先取回来（见 5.3 节），
-   把 `VentoyAutoRun.bat` 和 `drivers\` 一起打包成**一个** `.7z`，
-   在 `镜像管理` 里设为该 ISO 的**注入文件**。`drivers\` **即使为空也要留在压缩包里**——路径必须存在。
-   - `VentoyAutoRun.bat` 会在 `winpeshl.exe` 之前自动执行：用 `drvload` + `pnputil` 把 `X:\drivers`
-     里的驱动装进当前 WinPE，并把 `ipconfig /all`、网卡 PnP 列表、`list disk` 写进 `X:\VentoyAutoRun.log`。
-   - 不想用它也行：自己写个批处理做同样的事，或者干脆靠下面的第 3 步收集驱动 +
-     `unattend.xml` 的 `DriverPaths` 让 Setup 自己加载（多数情况下这样就够）。
-
-3. **收集驱动**（要解压成 `.inf` 结构，不是厂商的 `.exe` 安装包）：
-   Intel 网卡驱动完整包、Broadcom NetXtreme、Mellanox WinOF-2、Realtek `rt640x64.inf`、
-   Marvell/Aquantia `aqnic`。服务器和笔记本差异很大，建议一次收全。
-
-### 6.3 现场定位这个报错
-
-按 `Shift+F10` 调出 cmd：
-
-```
-ipconfig /all
-```
-
-- 看不到 MAC 与 iVentoy 页面对应的网卡 → **就是缺网卡驱动**，回到 6.2。
-- 能看到网卡但仍报错 → `type X:\Windows\System32\ventoy\vtoype.log`，把日志发给作者。
-
----
-
-## 7. 步骤六：单机验证（**必做，不要直接批量**）
-
-找一台和量产机同型号的机器，物理断开其他硬盘：
-
-1. 确认 BIOS：**UEFI 模式、CSH/Legacy 关闭**、Secure Boot 按第 4 节决定开或关。
-2. 客户端设 PXE 启动，观察：
-   - 拿到 IP → 出现 iVentoy 菜单 → 5 秒后自动进入 Win11 ISO。
-   - 菜单没自动走 → 菜单超时没设或设成了 0。
-   - 出现"选自动安装脚本"界面停住 → 脚本选择超时时间还是 0。
-3. 进入分区阶段应**无提示直接开始**。若弹出分区界面 → `unattend.xml` 没被识别，检查是否放对目录、是否设成默认脚本。
-   - 若在分区阶段报 answer file 解析失败：优先怀疑 `$$VT_...$$` 没有被替换。iVentoy 只在**被当作自动安装脚本**处理的文件上做变量扩展，所以这通常意味着路径/默认脚本编号没配对，而不是变量语法写错了。注意 HTTP 直接下 `user/scripts/unattend.xml` 拿到的是**未展开**的原文，不能用来验证。
-4. 装完应自动登录进桌面，**流程到此结束**（没有后置脚本，不会再自动重启）。
-5. 验收清单：
-
-| 检查项 | 命令 / 位置 |
-|---|---|
-| 分区是 GPT + EFI + MSR | 磁盘管理，或 `diskpart` → `list partition` |
-| 系统语言/区域是中文 | 设置 → 时间和语言 |
-| 装到了预期的盘 | 装机时按 `Shift+F10` → `diskpart` → `list disk` 核对容量与磁盘号 |
-| Windows 版本正确 | `winver`，或 `dism /online /get-currentedition` |
-| 内置 Administrator 已启用 | `net user Administrator`，看"帐户启用"是否为 Yes |
-| Administrator 密码可登录 | 注销后用 `root123` 登录（或按下面那条重启验证） |
-| 自动登录生效 | 重启一次，应无需输密码直接进桌面 |
-| 中文注释没把 answer file 弄坏 | 装机过程中没有出现"无法分析或处理无人应答文件" |
-| 首次登录自动拉起驱动总裁 | 登录后应自动弹出安装界面；日志见 `C:\Windows\Temp\install-drivers.log` |
-| 驱动装完没有副作用 | 检查浏览器主页 / 默认搜索有没有被改（见 5.4 节） |
-
-> 计算机名会是 `DESKTOP-XXXXXXX` 这类随机名——这是当前方案的预期行为，不是故障，详见 5.3 节。
-
-6. 单机跑通后，**再**逐步放开并发。注意免费版上限。
-
----
-
-## 8. 步骤七：批量与授权
-
-- **免费版最多 20 个客户端**：判定依据是 iVentoy 主界面 `设备列表` 里的设备数量，到达 20 后不再服务新客户端。绕过方式只有"关掉 iVentoy 重开 + 换一批 IP 池"。**商用被禁止**，批量生产环境要买专业版。
-- **专业版 299 元**（大版本一次性，1.x 周期内有效）：客户端数量无限制、可商用。License 绑定**服务端母机**机器码（一个 License 最多 2 个机器码，绑定后不可解绑），客户机数量不受限。建议先用免费版把流程跑通再绑机器码。
-- 并发时 iVentoy 是单台服务器同时供 ISO / HTTP / SMB，网卡和磁盘 IO 是瓶颈；建议装机的机器和 iVentoy 服务器之间走千兆以上、别跨 WAN。
-
----
-
-## 9. 安全注意事项（务必看）
-
-有一个凭据会**以明文经过网络**：
-
-- `unattend.xml` 里的 Administrator 密码（当前是 `root123`）—— 明文写在文件里，且 iVentoy 的
-  HTTP 服务把 `user/` 目录直接对外开放（`http://<IP>:16000/user/...`），同网段任何人 `curl` 就能拿到。
-
-⚠️ **当前配置是本方案里安全性最差的一档**，三者叠加：内置 Administrator（攻击者第一个尝试的账户名）
-+ 自动登录（无需任何人输入密码就进桌面）+ 弱密码 `root123`，而且这个仓库是**公开**的，
-密码直接写在公网可见的文件里。**仅适合实验环境**。任何真实部署前至少要改密码，
-并考虑关掉自动登录。
-
-（之前 `deploy.ps1` 里的加域账号密码也是同样的暴露方式，该脚本已删除，所以这个风险点消失了。）
-
-缓解措施：
-
-- **装机期间隔离**：把 PXE 装机放在独立 VLAN / 临时交换机上进行，装完拔线。
-- **给密码设有效期**：把它当成一次性口令，量产完成后统一改密。
-- **别把真实密码提交进 git** —— 仓库是公开的，`unattend.xml` 是被跟踪文件，改完再 commit 就等于公开泄露。
-  真实凭据要么最后一步才填、要么用 `.gitignore` 里预留的本地覆盖文件。
-- iVentoy 管理界面 26000 端口不要暴露到非装机网段。
-- 未来如果要加回自动加域，更彻底的做法是**离线加域**（`djoin` 生成 blob，用 unattend 的
-  `Microsoft-Windows-UnattendedJoin` 走离线加域），完全不传凭据，代价是每台机器要先预生成 blob。
-
----
-
-## 10. 排错速查表
+## 10. 排错速查
 
 | 现象 | 原因 / 处理 |
 |---|---|
-| 客户端卡在获取 IP，最后 `PXE-E51` | 第三方 DHCP 不响应 PXE → 改用 iVentoy 内置 DHCP；或交换机 DHCP Snooping 拦了 ProxyDHCP（端口设 trusted） |
-| 拿到 IP 但 `PXE-E53 / No boot filename` | DHCP 响应了 PXE 但没给 bootfile → 切到 `ProxyNet`（或 `External` 并配 066/067） |
-| 客户端直接挂死 | 送错了架构的启动文件 → 用 `ProxyNet`/`External` 让 iVentoy 自己判断；`ExternalNet` 下检查 bootfile 的 `_bios`/`_uefi` 后缀 |
+| 卡在获取 IP，最后 `PXE-E51` | 第三方 DHCP 不响应 PXE → 用 iVentoy 内置 DHCP；或 DHCP Snooping 拦了 ProxyDHCP（端口设 trusted） |
+| 拿到 IP 但 `PXE-E53 / No boot filename` | 响应了 PXE 但没给 bootfile → 切 `ProxyNet`；或 `External` 并配 066/067 |
+| 客户端直接挂死 | 送错架构的启动文件 → 用 `ProxyNet`/`External` 让 iVentoy 自己判断；`ExternalNet` 下检查 bootfile 的 `_bios`/`_uefi` 后缀 |
 | 启动菜单停住不自动走 | 菜单默认超时时间 = 0 |
 | 停在"选择自动安装脚本" | 脚本选择超时时间 = 0 |
-| 分区界面弹出来了 | `unattend.xml` 没生效：路径/默认脚本编号/是否放在 `user/scripts` |
-| **装完没弹出驱动总裁** | 看 `C:\Windows\Temp\install-drivers.log`。没这个文件说明第 1 条命令就没跑起来 → 检查 iVentoy 的 16000 端口通不通、`user\deploy\` 下有没有 `install-drivers.cmd` |
-| 驱动脚本报下载失败 | `<iVentoy>\user\deploy\` 下缺 `DrvCeoSetup.exe`，或文件名不是这个（URL 写死了）。用浏览器打开那个 URL 可直接验证 |
-| 驱动总裁装不出驱动 | 它需要**公网**。客户机只通局域网时它会失败——先确认客户机能不能上外网 |
-| **改了 `unattend.xml` 但客户端行为完全没变** | **iVentoy 把脚本内容缓存在内存里**，只在服务启动时读一次。改完文件**必须重启 iVentoy**（或在界面里删除脚本再重新新增），否则客户端拿到的还是旧内容。这是本项目踩过最深的坑，见 5.1 节末尾 |
-| **停在「产品密钥」页** | ① `UserData` 里缺 `ProductKey`（它才是唯一能跳过密钥页的元素）；② 或密钥与镜像版本对不上，例如拿专业版密钥配 China Only 镜像。见 5.1 节 |
-| **装出来的版本不是专业版** | 用了 `/IMAGE/INDEX` 且索引写错。多版本 ISO 上索引 1 是**家庭版**，专业版是 4。改用 `/IMAGE/NAME` 可避免静默装错 |
-| 卡在「选择要安装的版本」页 | `/IMAGE/NAME` 和镜像里的 Name 不匹配，Setup 回退到交互式选择。用 `dism /Get-WimInfo` 照抄准确的 Name |
-| 开机先出现「语言/键盘」选择页 | 说明 `unattend.xml` **完全没被读到**。此时改 answer file 内容没用，先查：文件是否复制到 `user\scripts\`、是否设为默认自动脚本、脚本选择超时是否为 0 |
-| **报"无法分析或处理无人参与应答文件"** | **编码问题**：`unattend.xml` 丢了 UTF-8 BOM（多见于用编辑器另存为 ANSI/GBK，或用了不保留 BOM 的工具）。用 VS Code 确认右下角是 `UTF-8 with BOM` |
-| 报"缺少计算机所需的介质驱动程序" | **网卡驱动**问题（Hyper-V 测不出来，只有真机会遇到）→ 见第 6 节补救：`Shift+F10` + `ipconfig /all` 确认 |
-| 装到一半卡住、报无法应用映像 | 分区布局与固件不匹配（UEFI 用了 MBR 布局），或 `INSTALL/NAME` 版本名写错 |
-| 装到错误的盘 / 擦错盘 | 别写死 `DiskID=0`；`_CLOSEST_`/`_MAX_SIZE` **不排除 USB 盘**，装机拔掉所有可移动存储；首次测试物理拔掉数据盘 |
-| 装完发现所有机器同名 | 不会发生：当前不设 `<ComputerName>`，Windows 会生成随机名。如果哪天你手动设了固定名，就会撞名 |
-| **装完停在锁屏，自动登录没生效** | 九成是 `AutoLogon` 与 `AdministratorPassword` 两处密码**不一致**（改密码时只改了一处）。这两处必须完全相同 |
-| OOBE 没走完 / 卡在 OOBE 或直接报错 | 检查是否有人额外加了 `net user Administrator /active:yes` 之类的显式启用步骤——微软文档说明这可能导致设备无法正常进入 OOBE。启用账户应当只靠 `AutoLogon` 的 `Username=Administrator` |
-| 报密码不符合密码策略 | `root123` 只有 7 位、仅小写字母+数字（2 类字符）。单机默认策略不要求复杂度，所以正常能过；但若环境里下发了复杂度策略，Setup 会在这里失败。届时改成大小写+数字+符号的组合 |
+| 分区界面弹出来了 | `unattend.xml` 没生效：路径 / 默认脚本编号 / 是否放在 `user/scripts` |
+| 开机先出现"语言/键盘"选择页 | answer file **完全没被读到**，改内容没用，先查上面三条 |
+| 报"无法分析或处理无人参与应答文件" | **编码问题**：丢了 UTF-8 BOM（编辑器另存为 ANSI/GBK，或用不保留 BOM 的工具）。VS Code 右下角应为 `UTF-8 with BOM` |
+| 卡在"选择要安装的版本" | `/IMAGE/NAME` 与镜像里的 Name 不匹配，Setup 回退到交互选择。用 `dism /Get-WimInfo` 照抄 |
+| 装出来的版本不是专业版 | 用了 `/IMAGE/INDEX` 且写错——多版本 ISO 上索引 1 是**家庭版**，专业版是 4 |
+| 停在「产品密钥」页 | 缺 `ProductKey`（它才是唯一能跳过密钥页的元素）；或密钥与镜像版本对不上 |
+| 报"缺少计算机所需的介质驱动程序" | **网卡驱动**，Hyper-V 测不出来 → 第 6 节，`Shift+F10` + `ipconfig /all` |
+| 装到错误的盘 / 擦错盘 | 别写死 `DiskID=0`；`_CLOSEST_`/`_MAX_SIZE` **不排除 USB 盘**；装机拔掉可移动存储；首次测试拔数据盘 |
+| 装到一半卡住、报无法应用映像 | 分区布局与固件不匹配（UEFI 用了 MBR），或 `INSTALL/NAME` 版本名写错 |
+| **改了 `unattend.xml` 但客户端行为完全没变** | **iVentoy 缓存脚本内容**，只在启动时读一次 → 必须重启（或删除脚本再新增）。本项目踩过最深的坑 |
+| 装完停在锁屏，自动登录没生效 | 九成是 `AutoLogon` 与 `AdministratorPassword` 两处密码不一致 |
+| OOBE 没走完 / 卡在 OOBE / 直接报错 | 有人加了 `net user Administrator /active:yes` 之类的显式启用步骤（见第 4 节） |
+| 报密码不符合密码策略 | `root123` 只有 7 位、2 类字符。单机默认策略能过；环境下发了复杂度策略时会失败，改成大小写+数字+符号 |
+| **装完没弹出驱动总裁** | 看 `C:\Windows\Temp\install-drivers.log`。**没这个文件**说明第 1 条命令就没跑起来 → 查 16000 端口通不通、`user\deploy\` 下有没有 `install-drivers.cmd` |
+| 驱动脚本报下载失败 | `user\deploy\` 下缺 `tool_files.txt` 或 `tool\`，或文件不在清单里。浏览器打开该 URL 可直接验证 |
+| 日志出现 `MISSING or EMPTY` | `tool` 增删了文件但没重新生成清单 |
+| 驱动总裁装不出驱动 | 它需要**公网**，客户机只通局域网时会失败 |
+| 装完发现所有机器同名 | 不会发生：当前不设 `<ComputerName>`，Windows 生成随机名 |
 | UEFI 启动 Windows 花屏 | 1.0.25 已修，用最新版；菜单里也可设分辨率 |
-| 安全启动过不去 | 见第 4 节三种模式；个别机型要先使能 BIOS 的 UEFI CA |
-| 改动不生效 | iVentoy 修改配置后需重新"刷新镜像列表"；改了 `unattend.xml` 后确认没有旧副本残留 |
+| 安全启动过不去 | 见第 3 节三种模式；个别机型要先使能 BIOS 的 UEFI CA |
+| 改动不生效 | iVentoy 改配置后需重新"刷新镜像列表"；改了 `unattend.xml` 后确认没有旧副本残留 |
 
----
+## 11. 遗留问题
 
-## 11. 参考（官方文档）
+**1. `Windows.old` 为什么存在？（未查清）**
 
-- [iVentoy 使用说明](https://www.iventoy.com/cn/doc_start.html)
-- [操作系统全自动安装](https://www.iventoy.com/cn/doc_unattend_install.html)
-- [自动安装脚本 / 变量扩展](https://www.iventoy.com/cn/doc_autoinstall.html)
-- [配合第三方 DHCP Server](https://www.iventoy.com/cn/doc_ext_dhcp.html) ｜ [确认外部 DHCP 支持 PXE](https://www.iventoy.com/cn/doc_ext_dhcp_resp.html)
-- [HTTP 路径说明](https://www.iventoy.com/cn/doc_http_url.html)
-- [文件注入](https://www.iventoy.com/cn/doc_injection.html) ｜ [VentoyAutoRun.bat](https://www.iventoy.com/cn/doc_inject_autorun.html)
-- [启动 Windows 时缺少驱动错误](https://www.iventoy.com/cn/doc_win_driver.html)
-- [安全启动支持说明](https://www.iventoy.com/cn/sboot.html)
-- [Windows 11 ByPass 说明](https://www.iventoy.com/cn/doc_win11_bypass.html)
-- [关于 WinPE](https://www.iventoy.com/cn/doc_winpe.html) ｜ [版本说明（免费/专业）](https://www.iventoy.com/cn/doc_edition.html)
+answer file 里写了 `<WillWipeDisk>true</WillWipeDisk>`，**如果生效磁盘会被清空，不该留下 `Windows.old`**。
+它却一直在，意味着**分区那一步可能没按预期执行**，是潜在安全问题（给带数据的机器装机时磁盘可能不被清空）。
+
+不过 `<WillShowUI>OnError</WillShowUI>` 只在**出错时才弹 UI**，而实测全程无提示地自动走完，
+说明分区配置很可能确实生效了——所以更可能是**早期某次未擦盘安装的历史残留**，
+或者是**装完之后 Windows 功能更新**产生的（特性更新同样会生成 `Windows.old`）。
+
+**下次在真机上装机时留意**：有没有出现「你想将 Windows 安装在哪里」的分区选择页？
+再对比 `C:\Windows.old\Windows\System32\ntoskrnl.exe` 的时间和版本与当前系统是否一致。
+若出现分区页，查 `C:\Windows\Panther\setuperr.log`。
+想做决定性验证：先在目标盘建个第二分区放个标记文件，装完看标记是否消失。
+
+**2. 日志时间戳不精确（纯影响可读性）**
+
+`install-drivers.log` 里所有 `ok:` 行显示同一时间，因为批处理的 `for` 循环里 `%time%` 只在**进入循环时展开一次**，
+要显示真实时间得用延迟展开 `!time!`。**这一条故意没改**——脚本是实测通过的，为一个纯显示问题改动它、
+还要再花一轮装机验证，不划算。等下次因功能需要改这个脚本时顺手修掉。
+
+**3. 两处数字不一致（未改）**
+
+`README.md` 第 5 节曾写「`tool_files.txt`（112 行）」「`tool\`（约 599 MB）」，而实际清单是 **114 项 / ~999 MB**。
+纯笔误，不影响任何东西，暂留。
+
+## 参考
+
+- [iVentoy 使用说明](https://www.iventoy.com/cn/doc_start.html) ·
+  [操作系统全自动安装](https://www.iventoy.com/cn/doc_unattend_install.html) ·
+  [自动安装脚本 / 变量扩展](https://www.iventoy.com/cn/doc_autoinstall.html)
+- [配合第三方 DHCP Server](https://www.iventoy.com/cn/doc_ext_dhcp.html) ·
+  [确认外部 DHCP 支持 PXE](https://www.iventoy.com/cn/doc_ext_dhcp_resp.html)
+- [HTTP 路径说明](https://www.iventoy.com/cn/doc_http_url.html) ·
+  [文件注入](https://www.iventoy.com/cn/doc_injection.html) ·
+  [VentoyAutoRun.bat](https://www.iventoy.com/cn/doc_inject_autorun.html) ·
+  [启动 Windows 时缺少驱动错误](https://www.iventoy.com/cn/doc_win_driver.html)
+- [安全启动支持说明](https://www.iventoy.com/cn/sboot.html) ·
+  [Windows 11 ByPass 说明](https://www.iventoy.com/cn/doc_win11_bypass.html) ·
+  [关于 WinPE](https://www.iventoy.com/cn/doc_winpe.html) ·
+  [版本说明（免费/专业）](https://www.iventoy.com/cn/doc_edition.html)
