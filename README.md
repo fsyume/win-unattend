@@ -23,6 +23,48 @@
 | **当前上线镜像** | `zh-cn_windows_11_consumer_editions_version_25h2_updated_sep_2026_x64_dvd_cb71b7e8.iso`（9.12 GB，consumer 多版本） |
 | 目标版本 | Windows 11 Pro（`/IMAGE/NAME` = `Windows 11 Pro`；该镜像里是索引 4） |
 | 授权 | 免费版：**最多 20 个客户端、禁止商用**（见第 8 节） |
+| 状态 | ✅ 已端到端实测通过（见下方「已验证的完整链路」） |
+
+### ✅ 已验证的完整链路（实测通过）
+
+下表每一环都有日志证据，不是推断：
+
+| 环节 | 证据 | 状态 |
+|---|---|---|
+| iVentoy 下发 answer file | 客户端 `ventoy.log`：`SaveBuffer2File <ventoy\autoinstall_1> len:25589` | ✅ |
+| 变量展开 | 同上：`UnattendVarExpand` → `X:\Unattend.xml` | ✅ |
+| 全自动装机 | 中途无需人工介入 | ✅ |
+| 首次登录触发钩子 | 脚本被下载到 `C:\Windows\Temp\install-drivers.cmd` | ✅ |
+| 按清单取回 tool | `install-drivers.log`：`download finished: ok=112 bad=0` | ✅ |
+| 启动驱动安装 | 同上：`launching start.bat in C:\tool\...` + `launched, script exits` | ✅ |
+| DrvCeo 实际运行 | 手动复现确认；Hyper-V 虚拟机无驱动可装，故很快退出 | ✅ |
+
+**判断"客户端到底拿到哪一版脚本"的可靠办法**：客户端每次引导后会把日志回传到
+`<iVentoy>\log\client\<客户端IP>.zip`，解压看 `client_info\ventoy.log` 里
+`len:` 的数字，必须等于你磁盘上 `unattend.xml` 的实际字节数。
+
+> ⚠️ **不要用服务端 `log\log.txt` 判断客户端有没有请求过文件**——iVentoy
+> **只记录失败的 `user/` 请求（404），成功的下载一条都不记**。用"日志里没有"推断
+> "客户端没请求"是错的（我在排查中犯过这个错）。
+
+### ⚠️ 两个尚未查清的问题
+
+**1. `Windows.old` 为什么存在？**
+
+answer file 里写的是 `<WillWipeDisk>true</WillWipeDisk>`，**如果生效，磁盘会被清空，
+不该留下 `Windows.old`**。但它一直在。这意味着**分区那一步可能没按预期执行**，
+是一个潜在的安全问题（给带数据的机器装机时磁盘可能不被清空）。
+
+**下次在真机上装机时留意**：有没有出现「你想将 Windows 安装在哪里」的分区选择页？
+若出现，说明 `DiskConfiguration` 没生效，再查 `C:\Windows\Panther\setuperr.log`。
+
+**2. 日志时间戳不精确（纯影响可读性）**
+
+`install-drivers.log` 里所有 `ok:` 行显示的是同一个时间，因为批处理的 `for` 循环里
+`%time%` 只在**进入循环时展开一次**。想显示真实时间要用延迟展开 `!time!`。
+
+**这一条故意没改**——当前脚本是实测通过的，为一个纯显示问题去改动它、还要再花一轮
+装机验证，不划算。等下次因功能需要改这个脚本时顺手修掉即可。
 
 ### `iso\` 目录里的另外两个文件都不是本方案在用的
 
