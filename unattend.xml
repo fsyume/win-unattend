@@ -464,13 +464,13 @@
       -->
       <FirstLogonCommands>
         <SynchronousCommand wcm:action="add">
-          <CommandLine>cmd /c curl -sSL -o C:\Windows\Temp\install-drivers.cmd http://$$VT_SERVER_IP$$:$$VT_HTTP_PORT$$/user/deploy/install-drivers.cmd</CommandLine>
-          <Description>从 iVentoy 服务器下载安装脚本</Description>
+          <CommandLine>cmd /c curl -sSL --retry 20 --retry-delay 10 --retry-connrefused --retry-all-errors --connect-timeout 10 -o C:\Windows\Temp\install-drivers.cmd http://$$VT_SERVER_IP$$:$$VT_HTTP_PORT$$/user/deploy/install-drivers.cmd</CommandLine>
+          <Description>从 iVentoy 服务器下载安装脚本（带重试）</Description>
           <Order>1</Order>
           <RequiresUserInput>false</RequiresUserInput>
         </SynchronousCommand>
         <SynchronousCommand wcm:action="add">
-          <CommandLine>cmd /c C:\Windows\Temp\install-drivers.cmd http://$$VT_SERVER_IP$$:$$VT_HTTP_PORT$$/user/deploy/tool_files.txt http://$$VT_SERVER_IP$$:$$VT_HTTP_PORT$$/user/deploy/tool</CommandLine>
+          <CommandLine>cmd /c if exist C:\Windows\Temp\install-drivers.cmd (C:\Windows\Temp\install-drivers.cmd http://$$VT_SERVER_IP$$:$$VT_HTTP_PORT$$/user/deploy/tool_files.txt http://$$VT_SERVER_IP$$:$$VT_HTTP_PORT$$/user/deploy/tool) else (echo STEP1_FAILED_DOWNLOAD_SCRIPT > C:\Windows\Temp\install-drivers-failed.txt)</CommandLine>
           <Description>取回 tool 文件夹并执行驱动总裁的 start.bat</Description>
           <Order>2</Order>
           <RequiresUserInput>false</RequiresUserInput>
