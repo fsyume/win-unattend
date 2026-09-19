@@ -20,9 +20,6 @@
                                           _1ST_NONUSB   第一个非 USB 盘
                                           _MAX_SIZE     容量最大的盘
                                           _CLOSEST_<n>  最接近 n GB 的盘
-    $$VT_SERVER_IP$$                -> iVentoy 服务器 IP
-    $$VT_HTTP_PORT$$                -> iVentoy HTTP 端口（默认 16000）
-    $$VT_MAC_DASH_UPPER$$           -> 客户端 PXE 网卡 MAC，形如 11-22-33-AA-BB-CC
 
   使用前必须修改的地方（在文件里搜索 "EDIT ME"）：
     1. /IMAGE/NAME          -> install.wim 里的准确版本名
@@ -300,14 +297,17 @@
                xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State"
                xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
       <!--
-        这里故意写一个临时名字。真正的名字由 deploy.ps1 在首次登录时
-        根据序列号 / MAC 生成，并在加域时通过 Add-Computer -NewName 一起应用，
-        这样 AD 里的计算机对象一开始就是正确的名字。
+        这里故意不设置 <ComputerName>，让 Windows 自己生成 DESKTOP-XXXXXXX 这样的随机名。
 
-        不要在这里用 $$VT_MAC_COLON_UPPER$$ 拼名字：
-        Windows 计算机名不允许包含 ":"，且最长 15 个字符。
+        为什么不写死一个固定名字：现阶段没有后置脚本，所有机器都会拿到同一个名字，
+        在同一网段或同一个域里会直接冲突。
+
+        也不用 iVentoy 的 MAC 变量来拼：Windows 计算机名最长 15 个字符，
+        而带连字符的 MAC 本身就有 17 个字符，拼不出合法名字。
+
+        想按序列号 / MAC 自动命名，需要一个后置脚本在首次登录时调用
+        Rename-Computer 或 Add-Computer -NewName，见 README 的「已知缺口」一节。
       -->
-      <ComputerName>PC-DEPLOYING</ComputerName>
       <!-- EDIT ME：改成你的信息 -->
       <RegisteredOrganization>YourCompany</RegisteredOrganization>
       <RegisteredOwner>IT</RegisteredOwner>
@@ -339,9 +339,11 @@
                xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
 
       <!--
-        这里用 LogonCount 3（默认是 1），因为 deploy.ps1 在结尾会重启机器；
-        如果不加大，第二次开机就会停在锁屏，后面的步骤永远不会执行。
-        如果加域或其他环节导致重启次数更多，把 3 调大即可。
+        LogonCount 是自动登录的次数，这里 1 次就够，因为装完没有会自动重启的后置脚本。
+
+        以后如果加回"首次登录后跑脚本、脚本结尾会重启"的做法，
+        必须把它调到 2 以上（通常 3），否则第二次开机会停在锁屏，
+        后面的步骤永远不会执行。
       -->
       <AutoLogon>
         <Password>
@@ -350,29 +352,9 @@
           <PlainText>true</PlainText>
         </Password>
         <Enabled>true</Enabled>
-        <LogonCount>3</LogonCount>
+        <LogonCount>1</LogonCount>
         <Username>deploy</Username>
       </AutoLogon>
-
-      <!--
-        这里是 Windows Setup 与 iVentoy 服务器之间的桥梁。
-
-        answer file 是静态的，但带机器特征的工作（驱动包、软件、
-        按序列号改名、加域）不是。iVentoy 会通过 HTTP 提供自己的 user 目录，
-        因此脚本在首次登录时从下面的地址拉取：
-            http://<iVentoy 服务器 IP>:16000/user/deploy/deploy.ps1
-
-        之所以写成一行：FirstLogonCommands 是通过 cmd.exe 原样执行的，
-        不能换行续行。'&' 在 XML 里必须转义成 &amp;。
-      -->
-      <FirstLogonCommands>
-        <SynchronousCommand wcm:action="add">
-          <Order>1</Order>
-          <Description>iVentoy post-install deployment script</Description>
-          <CommandLine>powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Continue'; $u='http://$$VT_SERVER_IP$$:$$VT_HTTP_PORT$$/user/deploy/deploy.ps1'; $o='C:\Windows\Temp\deploy.ps1'; try { Invoke-WebRequest -Uri $u -OutFile $o -UseBasicParsing } catch { $o=$null }; if ($o -and (Test-Path $o)) { &amp; $o -PxeMac '$$VT_MAC_DASH_UPPER$$' -ServerIp '$$VT_SERVER_IP$$' -ServerPort '$$VT_HTTP_PORT$$' } else { Add-Content 'C:\Windows\Temp\deploy.log' ('FAILED to download ' + $u) }"</CommandLine>
-          <RequiresUserInput>false</RequiresUserInput>
-        </SynchronousCommand>
-      </FirstLogonCommands>
 
       <OOBE>
         <HideEULAPage>true</HideEULAPage>

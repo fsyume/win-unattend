@@ -1,12 +1,15 @@
 # iVentoy 部署 Windows 11 无人值守 — 实施手册
 
-针对你的环境选定：**UEFI/GPT 客户端 + Windows 11 + 已有第三方 DHCP + 完整后置自动化（改名 / 加域 / 装驱动 / 装软件）**。
+针对你的环境选定：**UEFI/GPT 客户端 + Windows 11 + 已有第三方 DHCP + 全自动装机（不含后置自动化）**。
+
+> **当前范围说明**：现阶段只做「无人值守装完 Windows 11」，**不包含**改名 / 加域 / 装软件 / 推驱动。
+> 后置脚本已被移除，原因和加回方法见 [第 5.2 节「已知缺口」](#52-已知缺口现阶段没做的部分)。
 
 ---
 
 ## 0. 方案总览
 
-整体思路：**iVentoy 只负责"把 ISO 送到机器上并回答无人值守问题"，真正带机器特征的工作（驱动、改名、加域、装软件）交给一份在首次登录时从 iVentoy 服务器 HTTP 拉取的 PowerShell 脚本。**
+整体思路：**iVentoy 负责把 ISO 送到机器上，`unattend.xml` 负责回答全部安装问题**。全程无人干预，装完停在桌面。
 
 ```
 客户端加电 (UEFI PXE)
@@ -19,11 +22,8 @@
         ├─(3) 依赖 ISO 内 boot.wim 自带的网卡驱动把 ISO 挂成本地盘
         │      （不做文件注入；万一真机报"缺少驱动"，见第 6 节补救）
         │
-        ├─(4) unattend.xml 生效：擦盘 → 建 GPT 分区 → 装 WIM → 创建 deploy 账户 → 自动登录
-        │
-        └─(5) 首次登录 FirstLogonCommands：
-               HTTP 拉取 http://<iVentoy>:16000/user/deploy/deploy.ps1 并执行
-                 → 装驱动包 → 装软件 → 按序列号改名 + 加域 → 重启
+        └─(4) unattend.xml 生效：擦盘 → 建 GPT 分区 → 装 WIM
+               → 创建 deploy 账户 → 自动登录进桌面（结束）
 ```
 
 四个「自动化开关」缺一个就会停在某处等人点：
@@ -42,17 +42,14 @@
 ```
 <iVentoy 解压目录>\
 ├── iso\                                 ← 放 Windows 11 ISO（可软链接）
-├── user\
-│   ├── scripts\
-│   │   └── unattend.xml                 ← 【本仓库 unattend.xml 放这里】
-│   ├── deploy\
-│   │   ├── deploy.ps1                   ← 【本仓库 user/deploy/deploy.ps1】
-│   │   ├── drivers.zip                  ← 你准备的驱动包（可选）
-│   │   └── 7z2408-x64.exe 等            ← 你准备的静默安装包（可选）
-│   └── injection\                       ← 当前方案**不使用**，仅作缺驱动时的补救备用
-│       ├── VentoyAutoRun.bat
-│       └── drivers\
+└── user\
+    └── scripts\
+        └── unattend.xml                 ← 【本仓库 unattend.xml 放这里】
 ```
+
+本仓库只有三个文件：`unattend.xml`（answer file）、`README.md`（本文档）、`.gitignore`。
+后置脚本 `deploy.ps1` 和注入负载 `VentoyAutoRun.bat` 已按你的要求删除，
+需要时可以从 git 历史里取回（见第 5.2 节）。
 
 **命名铁律**（官方明确要求）：iVentoy 解压路径、`iso` 目录下的目录名和 ISO 文件名、脚本名，**都不能有中文或空格**。
 
@@ -72,7 +69,8 @@
    - Linux：`sudo bash iventoy.sh start`；自启动用 `sudo bash iventoy.sh -R start`（`-R` = 按上次参数启动，前提是先手动成功启动过一次）。
 5. 浏览器用 **Chrome 或 Firefox**（官方只测了这两个），访问 `http://127.0.0.1:26000`。
 
-> 端口备忘：管理界面 **26000**、HTTP 服务 **16000**、NBD **10809**。你的 `deploy.ps1` 通过 16000 分发，防火墙上要放通。
+> 端口备忘：管理界面 **26000**、HTTP 服务 **16000**、NBD **10809**。
+> 客户端要能访问 16000（iVentoy 用它把 ISO 内容传给客户端），防火墙上要放通。
 
 ---
 
@@ -159,9 +157,9 @@ iVentoy 1.0.40+ 支持，**仅 X86_64 客户机**，三种模式：
 
 ---
 
-## 5. 步骤四：改 answer file 和脚本里的 EDIT ME
+## 5. 步骤四：改 answer file 里的 EDIT ME
 
-### `unattend.xml`（搜索 `EDIT ME`）
+### 5.1 `unattend.xml`（搜索 `EDIT ME`）
 
 | 位置 | 改成 |
 |---|---|
@@ -238,25 +236,32 @@ dism /Get-WimInfo /WimFile:D:\sources\install.wim
 
 **擦盘保护**：`<WillWipeDisk>true</WillWipeDisk>` 不可逆。选盘为什么不写死 `DiskID=0`——多控制器服务器上枚举顺序和你以为的不一样，写死 0 很可能擦错盘。用"最接近 200GB"这种**按属性选**的方式，换固件、换控制器、换机型都不需要改 answer file。**首次测试请物理拔掉所有数据盘。**
 
-### `deploy.ps1`（文件顶部 `$Cfg` 配置块）
+### 5.2 已知缺口（现阶段没做的部分）
 
-| 项 | 说明 |
-|---|---|
-| `NamePrefix` / `NameSource` / `SerialTail` | 命名规则，默认"PC-" + 序列号后 10 位 |
-| `JoinDomain` / `DomainName` | 是否加域、域名 |
-| `DomainJoinUser` / `DomainJoinPassword` | **专用加域账号**（见第 9 节安全） |
-| `TargetOU` | 机器对象落到哪个 OU |
-| `DriverZipName` | 驱动包文件名（放在 `user/deploy/` 下），留空跳过 |
-| `WingetIds` | 用 winget 装的软件 ID 列表 |
-| `LocalInstallers` | 本地静默安装包列表 |
-| `DisableAutoLogon` | 见下 |
-| `RebootAtEnd` | 装完是否自动重启 |
+删掉后置脚本后，下面这些**不会自动完成**。装机前请确认你能接受：
 
-**关于 `DisableAutoLogon`**：你要求保留自动登录，所以默认 `$false`。但要提醒——加域后的生产机把本地管理员密码明文留在 `Winlogon\DefaultPassword` 是一个真实的安全口子。建议评估后改成 `$true`，脚本会关闭自动登录并清除存储的密码。
+| 能力 | 现状 | 影响 |
+|---|---|---|
+| **自动命名** | ❌ 没有 | `unattend.xml` 不设 `<ComputerName>`，Windows 自己生成 `DESKTOP-XXXXXXX` 之类的随机名。想按序列号/MAC 命名必须加后置脚本 |
+| **加入域** | ❌ 没有 | 装完是工作组机器，需手动加域 |
+| **装软件 / 打驱动包** | ❌ 没有 | 只能手动装，或用其它手段（组策略、SCCM、Intune）在加域后推 |
+| **关闭自动登录** | ❌ 没有 | 自动登录保持开启，`Winlogon\DefaultPassword` 里明文存着本地管理员密码 |
+| 全自动装完 Win11 + 本地管理员 + 自动登录 | ✅ 有 | 这是当前方案的全部内容 |
 
-改名策略说明：脚本默认用 **BIOS 序列号**（按 `Add-Computer -NewName` 在**加域那一刻**应用），这样 AD 里的对象一开始就是正确的名字，不需要先加域再改名。序列号缺失或是 `To be filled by O.E.M.` 这类垃圾值时自动回退到 PXE 网卡 MAC；`unattend.xml` 里 `specialize` 阶段的 `PC-DEPLOYING` 只是占位名。
+**为什么不设 `ComputerName`**：写死一个固定名字会让所有机器同名，在同网段或同域里直接冲突。而用 iVentoy 的 MAC 变量也拼不出合法名字——Windows 计算机名最长 15 字符，带连字符的 MAC 本身就有 17 字符。
 
-> 为什么不直接在 `unattend.xml` 里用 `$$VT_MAC_COLON_UPPER$$` 命名？因为 Windows 计算机名不允许 `:` 且最长 15 字符，iVentoy 没有能直接拼出合法名字的变量。
+**以后想加回后置自动化**：脚本已从仓库删除，但完整内容在 git 历史里，可以取回：
+
+```bash
+git show 948160a:user/deploy/deploy.ps1          > deploy.ps1
+git show 948160a:user/injection/VentoyAutoRun.bat > VentoyAutoRun.bat
+```
+
+同时需要改回 `unattend.xml` 两处：
+1. 加回 `FirstLogonCommands` 钩子（同样在 `git show 948160a:unattend.xml` 里）；
+2. 把 `<LogonCount>` 从 `1` 调回 `3`——因为那个脚本结尾会重启，1 次自动登录不够，第二次开机会停在锁屏。
+
+第 6 节的缺驱动补救方案同理，需要重新做注入包。
 
 ---
 
@@ -293,14 +298,17 @@ iVentoy 通过 PXE 启动后，要在 WinPE 里用**网卡驱动**把服务器�
    </component>
    ```
 
-2. **打注入包**：把 `user/injection/` 里的内容（`VentoyAutoRun.bat` + `drivers\`）打包成**一个** `.7z`，
+2. **打注入包**：注入负载的文件已从仓库删除，先取回来（见 5.2 节），
+   把 `VentoyAutoRun.bat` 和 `drivers\` 一起打包成**一个** `.7z`，
    在 `镜像管理` 里设为该 ISO 的**注入文件**。`drivers\` **即使为空也要留在压缩包里**——路径必须存在。
    - `VentoyAutoRun.bat` 会在 `winpeshl.exe` 之前自动执行：用 `drvload` + `pnputil` 把 `X:\drivers`
      里的驱动装进当前 WinPE，并把 `ipconfig /all`、网卡 PnP 列表、`list disk` 写进 `X:\VentoyAutoRun.log`。
+   - 不想用它也行：自己写个批处理做同样的事，或者干脆靠下面的第 3 步收集驱动 +
+     `unattend.xml` 的 `DriverPaths` 让 Setup 自己加载（多数情况下这样就够）。
 
 3. **收集驱动**（要解压成 `.inf` 结构，不是厂商的 `.exe` 安装包）：
    Intel 网卡驱动完整包、Broadcom NetXtreme、Mellanox WinOF-2、Realtek `rt640x64.inf`、
-   Marvell/Aquantia `aqnic`。服务器和笔记本差异很大，建议一次收全，`drivers/README.txt` 里列了对照。
+   Marvell/Aquantia `aqnic`。服务器和笔记本差异很大，建议一次收全。
 
 ### 6.3 现场定位这个报错
 
@@ -326,20 +334,20 @@ ipconfig /all
    - 出现"选自动安装脚本"界面停住 → 脚本选择超时时间还是 0。
 3. 进入分区阶段应**无提示直接开始**。若弹出分区界面 → `unattend.xml` 没被识别，检查是否放对目录、是否设成默认脚本。
    - 若在分区阶段报 answer file 解析失败：优先怀疑 `$$VT_...$$` 没有被替换。iVentoy 只在**被当作自动安装脚本**处理的文件上做变量扩展，所以这通常意味着路径/默认脚本编号没配对，而不是变量语法写错了。注意 HTTP 直接下 `user/scripts/unattend.xml` 拿到的是**未展开**的原文，不能用来验证。
-4. 装完应自动登录进桌面，然后会自动重启一次（`deploy.ps1` 结尾）。
+4. 装完应自动登录进桌面，**流程到此结束**（没有后置脚本，不会再自动重启）。
 5. 验收清单：
 
 | 检查项 | 命令 / 位置 |
 |---|---|
 | 分区是 GPT + EFI + MSR | 磁盘管理，或 `diskpart` → `list partition` |
 | 系统语言/区域是中文 | 设置 → 时间和语言 |
-| 计算机名符合规则 | `hostname` |
-| 已加域且在正确 OU | `systeminfo \| findstr /i domain`，AD 用户和计算机 |
-| 驱动装上了 | 设备管理器无黄色感叹号，`pnputil /enum-drivers` |
-| 软件装上了 | 按你配置的 winget/安装包核对 |
-| 脚本执行日志 | `C:\Windows\Temp\deploy.log` 和 `deploy-transcript.log` |
-| 完成标记 | 注册表 `HKLM\SOFTWARE\ITDeploy` |
-| WinPE 注入日志 | 本方案不做注入，无此项。需要看磁盘/网卡时可 `Shift+F10` 手动敲 `diskpart` → `list disk`、`ipconfig /all` |
+| 装到了预期的盘 | 装机时按 `Shift+F10` → `diskpart` → `list disk` 核对容量与磁盘号 |
+| Windows 版本正确 | `winver`，或 `dism /online /get-currentedition` |
+| `deploy` 账户在 Administrators 组 | `net localgroup Administrators` |
+| 自动登录生效 | 重启一次，应无需输密码直接进桌面 |
+| 中文注释没把 answer file 弄坏 | 装机过程中没有出现"无法分析或处理无人应答文件" |
+
+> 计算机名会是 `DESKTOP-XXXXXXX` 这类随机名——这是当前方案的预期行为，不是故障，详见 5.2 节。
 
 6. 单机跑通后，**再**逐步放开并发。注意免费版上限。
 
@@ -355,18 +363,22 @@ ipconfig /all
 
 ## 9. 安全注意事项（务必看）
 
-这套方案里有两个凭据会**以明文经过网络**：
+有一个凭据会**以明文经过网络**：
 
-1. `unattend.xml` 里的本地管理员密码 —— 明文写在文件里，且 iVentoy 的 HTTP 服务把 `user/` 目录直接对外开放（`http://<IP>:16000/user/...`），同网段任何人 `curl` 就能拿到。
-2. `deploy.ps1` 里的加域账号密码 —— 同样明文、同样可被下载。
+- `unattend.xml` 里的本地管理员密码 —— 明文写在文件里，且 iVentoy 的 HTTP 服务把 `user/` 目录
+  直接对外开放（`http://<IP>:16000/user/...`），同网段任何人 `curl` 就能拿到。
+
+（之前 `deploy.ps1` 里的加域账号密码也是同样的暴露方式，该脚本已删除，所以这个风险点消失了。）
 
 缓解措施：
 
-- **专用加域账号**：只授予目标 OU 上"将工作站加入域"的委派权限，绝不用 Domain Admin。
 - **装机期间隔离**：把 PXE 装机放在独立 VLAN / 临时交换机上进行，装完拔线。
-- **装机完成即改密**：`deploy.ps1` 跑完后轮换这两个密码；`DisableAutoLogon = $true` 可同时清掉注册表里存的明文密码。
-- 加域环节更彻底的做法是**离线加域**（`djoin` 生成 blob，用 unattend 的 `Microsoft-Windows-UnattendedJoin` 走离线加域），完全不传凭据，代价是每台机器要先预生成 blob。
+- **给密码设有效期**：把它当成一次性口令，量产完成后统一改密。
+- **别把真实密码提交进 git** —— 仓库是公开的，`unattend.xml` 是被跟踪文件，改完再 commit 就等于公开泄露。
+  真实凭据要么最后一步才填、要么用 `.gitignore` 里预留的本地覆盖文件。
 - iVentoy 管理界面 26000 端口不要暴露到非装机网段。
+- 未来如果要加回自动加域，更彻底的做法是**离线加域**（`djoin` 生成 blob，用 unattend 的
+  `Microsoft-Windows-UnattendedJoin` 走离线加域），完全不传凭据，代价是每台机器要先预生成 blob。
 
 ---
 
@@ -380,15 +392,14 @@ ipconfig /all
 | 启动菜单停住不自动走 | 菜单默认超时时间 = 0 |
 | 停在"选择自动安装脚本" | 脚本选择超时时间 = 0 |
 | 分区界面弹出来了 | `unattend.xml` 没生效：路径/默认脚本编号/是否放在 `user/scripts` |
+| **报"无法分析或处理无人参与应答文件"** | **编码问题**：`unattend.xml` 丢了 UTF-8 BOM（多见于用编辑器另存为 ANSI/GBK，或用了不保留 BOM 的工具）。用 VS Code 确认右下角是 `UTF-8 with BOM` |
 | 报"缺少计算机所需的介质驱动程序" | **网卡驱动**问题（Hyper-V 测不出来，只有真机会遇到）→ 见第 6 节补救：`Shift+F10` + `ipconfig /all` 确认 |
 | 装到一半卡住、报无法应用映像 | 分区布局与固件不匹配（UEFI 用了 MBR 布局），或 `INSTALL/NAME` 版本名写错 |
 | 装到错误的盘 / 擦错盘 | 别写死 `DiskID=0`；`_CLOSEST_`/`_MAX_SIZE` **不排除 USB 盘**，装机拔掉所有可移动存储；首次测试物理拔掉数据盘 |
-| 自动登录后脚本没跑 | 看 `C:\Windows\Temp\deploy.log`；多为 16000 端口不通或 `user/deploy/deploy.ps1` 路径不对 |
-| 脚本报权限不足 | FirstLogonCommands 没提权 → 改用 `specialize` 阶段 `Microsoft-Windows-Deployment\RunSynchronous`（以 SYSTEM 运行） |
-| 加域失败：对象已存在 | 重装同名机器需先在 AD 里清理同名计算机对象（`Add-Computer` 没有 `-Force`） |
+| 装完发现所有机器同名 | 不会发生：当前不设 `<ComputerName>`，Windows 会生成随机名。如果哪天你手动设了固定名，就会撞名 |
 | UEFI 启动 Windows 花屏 | 1.0.25 已修，用最新版；菜单里也可设分辨率 |
 | 安全启动过不去 | 见第 4 节三种模式；个别机型要先使能 BIOS 的 UEFI CA |
-| 改动不生效 | iVentoy 修改配置后需重新"刷新镜像列表"；改脚本后确认没有旧副本 |
+| 改动不生效 | iVentoy 修改配置后需重新"刷新镜像列表"；改了 `unattend.xml` 后确认没有旧副本残留 |
 
 ---
 
