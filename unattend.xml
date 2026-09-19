@@ -414,7 +414,7 @@
       </AutoLogon>
 
       <!--
-        首次登录时自动做的事：把驱动总裁拉下来并启动它，装完驱动。
+        首次登录时自动做的事：把驱动总裁整包取回本地并启动它，装完驱动。
 
         【为什么用 FirstLogonCommands，而不是 $OEM$\SetupComplete.cmd】
         微软文档对 SetupComplete.cmd 写了一句很关键的话：
@@ -431,16 +431,28 @@
 
         【子元素顺序】按文档：CommandLine -> Description -> Order -> RequiresUserInput。
 
-        【两条命令的分工】
-          第 1 条：从 iVentoy 服务器把小脚本拉下来（URL 里的 $$...$$ 由 iVentoy 展开）
-          第 2 条：执行小脚本，并把安装包地址传给它
-        小脚本会下载驱动总裁安装包并【弹出图形界面】，由现场人员确认，
-        所以【不加 /S 静默参数】。
+        【为什么是逐文件下载而不是下载一个压缩包】
+        iVentoy 的 HTTP 是静态文件服务，只能按文件取，不能取目录，也没有目录列表。
+        所以清单（drvceo_files.txt，44 行、全 ASCII）在服务器侧预先列好，
+        脚本按清单一个个拉回来，并保持原来的目录结构。
+        包内路径都没有中文和空格，可以安全地直接拼进 URL。
 
-        【依赖】<iVentoy>\user\deploy\ 下必须同时有这两个文件：
-                  install-drivers.cmd   本仓库提供，原样复制
-                  DrvCeoSetup.exe       驱动总裁安装包，自行下载后改成这个名字
+        【两条命令的分工】
+          第 1 条：把驱动安装脚本拉到 C:\Windows\Temp\
+          第 2 条：执行它，并传入【清单地址】和【驱动包根地址】
+        脚本会把整包下到 C:\DrvCeo\，然后启动 DrvCeo.exe。
+        【默认不加参数】，保留图形界面由现场人员确认。
+
+        【依赖】<iVentoy>\user\deploy\ 下必须有：
+                  install-drivers.cmd      本仓库提供，原样复制
+                  drvceo_files.txt         本仓库提供，原样复制
+                  tool\Drvceo_Win10_Win11_x64_Lite\   驱动总裁整包
                 详见 user/deploy/README.md
+
+        【想改成全静默】官方文档在该包内 Res\Cmdline\zh_cn.txt，不要凭猜：
+                  -a       自动检测并安装驱动（部署环境无需加参数将自动安装）
+                  Silence  在 Drvceo.ini 的 [DrvCeoSet] 节下写 Silence=on，
+                           会隐藏软件窗体，运行和安装驱动时没有任何窗体
 
         【日志】客户机上 C:\Windows\Temp\install-drivers.log
                 脚本会保留在 C:\Windows\Temp\install-drivers.cmd，现场可手动重跑。
@@ -453,8 +465,8 @@
           <RequiresUserInput>false</RequiresUserInput>
         </SynchronousCommand>
         <SynchronousCommand wcm:action="add">
-          <CommandLine>cmd /c C:\Windows\Temp\install-drivers.cmd http://$$VT_SERVER_IP$$:$$VT_HTTP_PORT$$/user/deploy/DrvCeoSetup.exe</CommandLine>
-          <Description>下载并启动驱动总裁，由现场人员确认后安装</Description>
+          <CommandLine>cmd /c C:\Windows\Temp\install-drivers.cmd http://$$VT_SERVER_IP$$:$$VT_HTTP_PORT$$/user/deploy/drvceo_files.txt http://$$VT_SERVER_IP$$:$$VT_HTTP_PORT$$/user/deploy/tool/Drvceo_Win10_Win11_x64_Lite</CommandLine>
+          <Description>取回驱动总裁整包并启动，由现场人员确认后安装</Description>
           <Order>2</Order>
           <RequiresUserInput>false</RequiresUserInput>
         </SynchronousCommand>
