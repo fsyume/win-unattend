@@ -186,25 +186,47 @@ iVentoy 1.0.40+ 支持，**仅 X86_64 客户机**，三种模式：
 >
 > **千万不要把真实的 MAK 零售密钥填进去** —— 那才是有泄露风险的。
 
-**中文 ISO 陷阱（务必看）**：非英文版 Windows 安装介质的映像 **Name 通常是本地化的**。中文版 ISO 用 `dism /Get-WimInfo` 查出来的"名称"很可能是 `Windows 11 专业版` 而不是 `Windows 11 Pro`。必须**照 dism 原样抄**。
+**镜像选择是最容易踩坑的一步，务必看完。**
 
-而一旦这个值含中文，`unattend.xml` 就不能再保持我交付时的纯 ASCII 形态了。二选一：
+我们前后用过两张官方镜像，`NAME` 完全不同，可以说明这一步不能想当然：
 
-- **(a)** 把 `unattend.xml` 另存为 **UTF-8 带 BOM**；
-- **(b)** 改用索引，文件名保持 ASCII：
-  ```xml
-  <Key>/IMAGE/INDEX</Key>
-  <Value>5</Value>
-  ```
-  代价是索引和具体 ISO 绑定，换 ISO 要重新确认（`dism /Get-WimInfo` 里第几个是专业版）。
+| 镜像 | 实际 NAME | EDITIONID | 映像数 |
+|---|---|---|---|
+| `Win11_25H2_Pro_Chinese_Simplified_x64_v2.iso` | `Windows 11 Pro China Only` | `ProfessionalCountrySpecific` | 1 |
+| `zh-cn_windows_11_consumer_editions_version_25h2_updated_sep_2026_x64_dvd_*.iso` | `Windows 11 Pro` | `Professional` | 6 |
 
-查准确值的命令（在有 Windows 的机器上挂载 ISO 后执行）：
+**当前线上用的是第二张**（consumer 多版本镜像），所以 `/IMAGE/NAME` 填 `Windows 11 Pro`。
+
+### 为什么用 NAME 而不是 INDEX
+
+**因为 NAME 写错会"大声失败"，INDEX 写错会"静默装错版本"。**
+
+多版本 ISO 的索引是致命陷阱，这张 consumer 镜像的真实列表是：
+
+```
+索引 1 | Windows 11 Home                  EDITIONID=Core          ← 家庭版！
+索引 2 | Windows 11 Home Single Language
+索引 3 | Windows 11 Education
+索引 4 | Windows 11 Pro                   EDITIONID=Professional  ← 专业版
+索引 5 | Windows 11 Pro Education
+索引 6 | Windows 11 Pro for Workstations
+```
+
+**索引 1 是家庭版，不是专业版。** 写死 `INDEX=1` 会一路"成功"地把家庭版装上去，且和 ProductKey 里的专业版密钥互相矛盾——**它不会报错，只会装错**。所以本项目坚持用 `NAME`。
+
+### 换 ISO 时怎么确认
 
 ```cmd
 dism /Get-WimInfo /WimFile:D:\sources\install.wim
 ```
 
-新镜像可能是 `install.esd`，把文件名换掉即可。
+（`install.wim` 不存在就换成 `install.esd`）
+
+取输出里的 **「名称 / Name」**，原样填到 `/IMAGE/NAME` 的 `<Value>`。注意：
+
+- 要的是 **Name**，不是安装界面显示的 **DISPLAYNAME**（consumer 镜像上是中文的「Windows 11 专业版」）
+- 非英文介质上 Name **可能**被本地化（China Only 那张就是），所以必须照抄，不能凭感觉写 `Windows 11 Pro`
+- 一旦这个值含中文，`unattend.xml` 必须存为 **UTF-8 带 BOM**（本文件已经是）
 
 **分区布局**：默认是 `EFI 300MB + MSR 16MB + Windows(占满剩余)` 三分区。
 - 为什么这样最稳：`<Extend>true</Extend>` 的分区必须**最后创建**，所以 OS 分区放最后；不建独立恢复分区，WinRE 落在 `C:\Windows` 里，也顺带避开了 Windows 11 25H2/26H2 把恢复分区切成 500MB 后累积更新报 `0x80070643` 的老问题。
@@ -448,7 +470,9 @@ ipconfig /all
 | 启动菜单停住不自动走 | 菜单默认超时时间 = 0 |
 | 停在"选择自动安装脚本" | 脚本选择超时时间 = 0 |
 | 分区界面弹出来了 | `unattend.xml` 没生效：路径/默认脚本编号/是否放在 `user/scripts` |
-| **停在「产品密钥」页** | `UserData` 里缺 `ProductKey`。`/IMAGE/NAME` 只负责在 WIM 里挑映像，**跳不过密钥页**。本仓库已加入微软公开的 KMS 客户端通用密钥来选版本（见 5.1 节） |
+| **停在「产品密钥」页** | ① `UserData` 里缺 `ProductKey`（它才是唯一能跳过密钥页的元素）；② 或密钥与镜像版本对不上，例如拿专业版密钥配 China Only 镜像。见 5.1 节 |
+| **装出来的版本不是专业版** | 用了 `/IMAGE/INDEX` 且索引写错。多版本 ISO 上索引 1 是**家庭版**，专业版是 4。改用 `/IMAGE/NAME` 可避免静默装错 |
+| 卡在「选择要安装的版本」页 | `/IMAGE/NAME` 和镜像里的 Name 不匹配，Setup 回退到交互式选择。用 `dism /Get-WimInfo` 照抄准确的 Name |
 | 开机先出现「语言/键盘」选择页 | 说明 `unattend.xml` **完全没被读到**。此时改 answer file 内容没用，先查：文件是否复制到 `user\scripts\`、是否设为默认自动脚本、脚本选择超时是否为 0 |
 | **报"无法分析或处理无人参与应答文件"** | **编码问题**：`unattend.xml` 丢了 UTF-8 BOM（多见于用编辑器另存为 ANSI/GBK，或用了不保留 BOM 的工具）。用 VS Code 确认右下角是 `UTF-8 with BOM` |
 | 报"缺少计算机所需的介质驱动程序" | **网卡驱动**问题（Hyper-V 测不出来，只有真机会遇到）→ 见第 6 节补救：`Shift+F10` + `ipconfig /all` 确认 |

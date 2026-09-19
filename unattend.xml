@@ -220,36 +220,45 @@
         <OSImage>
           <InstallFrom>
             <!--
-              ★★★ 这里曾经写错，是整个流程卡住的根因 ★★★
+              ★★★ 这里是整个部署最容易踩的坑，务必读完 ★★★
 
-              原先写的是 "Windows 11 Pro"，但你这张 ISO 的实际元数据是：
-                  DISPLAYNAME : Windows 11 专业中文版
-                  NAME        : Windows 11 Pro China Only
-              也就是说它根本不是普通的 Pro，而是面向中国市场的
-              "Windows 11 Pro China Only" 这个独立 SKU，NAME 也不是 "Windows 11 Pro"。
-              匹配不上 → InstallFrom 解析失败 → Setup 回退到交互式界面，
-              于是先弹产品密钥页、再让你手动选版本（即使 ProductKey 是对的）。
+              线上 ISO：zh-cn_windows_11_consumer_editions_version_25h2_
+                        updated_sep_2026_x64_dvd_cb71b7e8.iso
+              （微软官方消费版多版本镜像）install.wim 里的真实版本列表：
 
-              现在改用【索引】，而不是名字：
-                /IMAGE/INDEX = 1
-              因为已确认这张 ISO 的 install.wim 里【只有 1 个映像】，
-              索引 1 是唯一的，既不用猜名字、也不用担心中文/本地化问题。
+                  索引 1 | Windows 11 Home                  EDITIONID=Core
+                  索引 2 | Windows 11 Home Single Language
+                  索引 3 | Windows 11 Education
+                  索引 4 | Windows 11 Pro                   EDITIONID=Professional
+                  索引 5 | Windows 11 Pro Education
+                  索引 6 | Windows 11 Pro for Workstations
 
-              ★ 换 ISO 时务必重新确认这个索引 ★
-              在一台 Windows 上挂载 ISO 后执行：
+              ⚠️ 索引 1 是【家庭版】，不是专业版！
+                 多版本 ISO 上写死 INDEX=1 会静默装成 Home，
+                 而且和下面 ProductKey 里的专业版密钥互相矛盾。
+
+              这里用【名字】而不是索引，两个原因：
+                1. 名字写错会【大声失败】（Setup 报找不到映像），
+                   索引写错只会【静默装错版本】——后者危险得多。
+                2. 名字不随 ISO 里版本的排序变化而失效。
+
+              ★ 换 ISO 时必须重新确认名字 ★
+              在 Windows 上挂载 ISO 后执行：
                   dism /Get-WimInfo /WimFile:D:\sources\install.wim
-              看你要装的是第几个，把下面的 Value 改成对应索引。
               （install.wim 不存在就换成 install.esd）
+              取输出的【名称 / Name】字段，原样填到下面的 Value。
+              注意：要的是 Name，不是安装界面显示的 DISPLAYNAME。
 
-              如果你更想用名字，可以写成：
-                  <Key>/IMAGE/NAME</Key>
-                  <Value>Windows 11 Pro China Only</Value>
-              注意要用 NAME，不是安装界面显示的 DISPLAYNAME（那是中文的
-              「Windows 11 专业中文版」）。用名字的好处是换 ISO 时索引变了也不怕。
+              实测过的两套介质，名字差别很大，可见这一步不能想当然：
+                  China Only 镜像 → NAME = "Windows 11 Pro China Only"
+                  consumer 镜像   → NAME = "Windows 11 Pro"
+
+              如果你想改用索引，consumer 镜像上专业版是 4：
+                  <Key>/IMAGE/INDEX</Key><Value>4</Value>
             -->
             <MetaData wcm:action="add">
-              <Key>/IMAGE/INDEX</Key>
-              <Value>1</Value>
+              <Key>/IMAGE/NAME</Key>
+              <Value>Windows 11 Pro</Value>
             </MetaData>
           </InstallFrom>
           <InstallTo>
@@ -265,58 +274,47 @@
       <UserData>
         <!--
           AcceptEula 必须保留：没有它，Windows Setup 会弹出许可条款页面，
-          全自动流程就断了。
-
-          FullName 和 Organization 也已按你的要求删除。它们和 specialize 阶段那两个
-          RegisteredOwner / RegisteredOrganization 是同一类"注册给谁"的展示性信息，
-          只是走 windowsPE 阶段、由 Microsoft-Windows-Setup 处理。
-          注意这两个元素【不支持空值】，要留就得填内容，不想要就必须整行删掉。
+          全自动流程就断了。文档规定的 UserData 子元素顺序是
+          AcceptEula -> FullName -> Organization -> ProductKey，
+          所以 AcceptEula 必须写在 ProductKey 前面。
         -->
         <AcceptEula>true</AcceptEula>
 
         <!--
-          ProductKey 已删除，这是查清镜像真实身份后修正的结论。
+          ProductKey 的作用（微软文档原文）：
+          Microsoft-Windows-Setup\UserData\ProductKey\Key
+          "Specifies the Windows image to install during Windows Setup"
+          —— 它既决定"装哪个版本"，也是【唯一能跳过「产品密钥」页的元素】。
+          （ImageInstall 里的 /IMAGE/NAME 只负责挑映像，管不到密钥页。）
 
-          你这张 ISO 的 install.wim 元数据（直接从镜像里读出来的）：
-              EDITIONID   = ProfessionalCountrySpecific
-              FLAGS       = ProfessionalCountrySpecific
-              NAME        = Windows 11 Pro China Only
-              DISPLAYNAME = Windows 11 专业中文版
-              BUILD       = 26200（Windows 11 25H2）
-              install.wim 里只有 1 个映像
+          下面 VK7JG-NPHTM-C97JM-9MPGT-3V66T 是微软给 Windows 11 专业版用的
+          通用安装密钥，属于公开信息、【不具备激活功能】。配 consumer 版官方镜像
+          已实测能正常跳过密钥页。真正的激活仍靠数字许可证 / KMS / ADBA。
 
-          关键：它的 EDITIONID 是 ProfessionalCountrySpecific，
-          而不是普通的 Professional。微软公开的那些 KMS 客户端通用密钥
-          （W269N-... 对应 Professional）【映射不到这个版本】，
-          所以填进去只会被拒 → 反而把「产品密钥」页顶出来。
+          ⚠️ 必须和上面 InstallFrom 的 /IMAGE/NAME 对上：
+             这里选专业版，上面也必须是专业版，否则 Setup 会报错。
 
-          这个 China Only SKU 是 OEM 专供版本，本来就没有公开的通用/KMS 密钥：
-          它的密钥是烧在整机固件（ACPI 的 MSDM 表）里的，所以品牌机装 Windows
-          从来不问密钥——Setup 会自动从固件读取。
+          ⚠️ 千万不要把真实的 MAK / 零售密钥写在这里 —— 本文件由 iVentoy
+             通过明文 HTTP 提供，那才是真的会泄露。
 
-          因此：
-            * 真机（带 MSDM 的 OEM 机器）→ Setup 自动用固件里的密钥，不会弹密钥页 ✅
-            * Hyper-V / 无 MSDM 的机器   → 固件里没有密钥，Setup 会弹密钥页，
-                                            只能手点「我没有产品密钥」。
-                                            这是测试环境的固有限制，不是配置错误。
+          WillShowUI 取值 Always / OnError（默认）/ Never。
+          这里用 OnError：密钥正常时不弹页面；万一被拒会弹出来让你看见，
+          而不是静默失败。确认稳定后可以改成 Never。
 
-          ⚠️ 如果哪天你换成了普通的多版本 Windows ISO（EDITIONID=Professional），
-             可以在这里加回通用密钥来跳过密钥页，例如：
-                <ProductKey>
-                  <Key>W269N-WFGWX-YVC9B-4J6C9-T83GX</Key>
-                  <WillShowUI>OnError</WillShowUI>
-                </ProductKey>
-             常用户籍的通用密钥：
-                Windows 11 Pro          W269N-WFGWX-YVC9B-4J6C9-T83GX
-                Windows 11 Pro N        MH37W-N47XK-V7XM9-C7227-GCQG9
-                Windows 11 Home         YTMG3-N6DKC-DKB77-7M9GH-8HVX7
-                Windows 11 Enterprise   NPPR9-FWDCX-D2C8J-H872K-2YT43
-                Windows 11 Education    NW6C2-QMPVW-D7KKK-3GKT6-VCFB2
-             （通用密钥只用来选版本，不具备激活功能，属于公开信息）
+          其他常用户籍的通用密钥（换版本时记得同时改上面的 /IMAGE/NAME）：
+            Windows 11 Pro          W269N-WFGWX-YVC9B-4J6C9-T83GX
+            Windows 11 Home         YTMG3-N6DKC-DKB77-7M9GH-8HVX7
+            Windows 11 Enterprise   NPPR9-FWDCX-D2C8J-H872K-2YT43
+            Windows 11 Education    NW6C2-QMPVW-D7KKK-3GKT6-VCFB2
 
-          ⚠️ 千万不要把真实的 MAK/零售密钥写在这里——本文件由 iVentoy 通过明文
-             HTTP 提供，那才是真的会泄露。
+          ⚠️ 记一笔历史教训：之前那张 China Only 镜像
+             （EDITIONID=ProfessionalCountrySpecific）用不了任何通用密钥，
+             那种镜像只能删掉本元素、靠主板固件里的 OEM 密钥。
         -->
+        <ProductKey>
+          <Key>VK7JG-NPHTM-C97JM-9MPGT-3V66T</Key>
+          <WillShowUI>OnError</WillShowUI>
+        </ProductKey>
       </UserData>
     </component>
   </settings>
