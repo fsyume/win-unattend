@@ -220,28 +220,36 @@
         <OSImage>
           <InstallFrom>
             <!--
-              EDIT ME：安装的版本名。在一台可用的 Windows 上执行下面的命令列出所有版本：
+              ★★★ 这里曾经写错，是整个流程卡住的根因 ★★★
+
+              原先写的是 "Windows 11 Pro"，但你这张 ISO 的实际元数据是：
+                  DISPLAYNAME : Windows 11 专业中文版
+                  NAME        : Windows 11 Pro China Only
+              也就是说它根本不是普通的 Pro，而是面向中国市场的
+              "Windows 11 Pro China Only" 这个独立 SKU，NAME 也不是 "Windows 11 Pro"。
+              匹配不上 → InstallFrom 解析失败 → Setup 回退到交互式界面，
+              于是先弹产品密钥页、再让你手动选版本（即使 ProductKey 是对的）。
+
+              现在改用【索引】，而不是名字：
+                /IMAGE/INDEX = 1
+              因为已确认这张 ISO 的 install.wim 里【只有 1 个映像】，
+              索引 1 是唯一的，既不用猜名字、也不用担心中文/本地化问题。
+
+              ★ 换 ISO 时务必重新确认这个索引 ★
+              在一台 Windows 上挂载 ISO 后执行：
                   dism /Get-WimInfo /WimFile:D:\sources\install.wim
-              （较新的介质的文件名可能是 install.esd，替换即可）
+              看你要装的是第几个，把下面的 Value 改成对应索引。
+              （install.wim 不存在就换成 install.esd）
 
-              ★★★ 本地化介质警告 ★★★
-              非英文版 Windows 介质上的映像 Name 通常是本地化的。
-              中文版 ISO 用 dism 查出来往往不是 "Windows 11 Pro"，而是中文的
-              「Windows 11 专业版」。必须原样照抄 dism 打印出来的 Name。
-
-              本文件已经是 UTF-8 with BOM，所以可以直接填中文版本名，
-              只要你的编辑器保存时没有把 BOM 丢掉。
-
-              另一种选择是改用索引，避免中文：
-                    <Key>/IMAGE/INDEX</Key><Value>5</Value>
-              代价是索引和具体 ISO 绑定，换 ISO 就要重新确认。
-
-              用 /IMAGE/NAME 而不是 /IMAGE/INDEX 的好处是：
-              ISO 重新发布时若版本顺序变了，不会把你打挂。
+              如果你更想用名字，可以写成：
+                  <Key>/IMAGE/NAME</Key>
+                  <Value>Windows 11 Pro China Only</Value>
+              注意要用 NAME，不是安装界面显示的 DISPLAYNAME（那是中文的
+              「Windows 11 专业中文版」）。用名字的好处是换 ISO 时索引变了也不怕。
             -->
             <MetaData wcm:action="add">
-              <Key>/IMAGE/NAME</Key>
-              <Value>Windows 11 Pro</Value>
+              <Key>/IMAGE/INDEX</Key>
+              <Value>1</Value>
             </MetaData>
           </InstallFrom>
           <InstallTo>
@@ -267,36 +275,48 @@
         <AcceptEula>true</AcceptEula>
 
         <!--
-          为什么必须有 ProductKey：
-          微软文档对 Microsoft-Windows-Setup\UserData\ProductKey\Key 的定义是
-          "Specifies the Windows image to install during Windows Setup"，
-          它同时也是【唯一能跳过「产品密钥」页的元素】。
-          上面 ImageInstall 里的 /IMAGE/NAME 只负责在 install.wim 里挑映像，
-          管不到密钥页，所以只写 /IMAGE/NAME 会卡在那一页。
+          ProductKey 已删除，这是查清镜像真实身份后修正的结论。
 
-          下面这个是微软官方公开的 KMS 客户端通用密钥（Windows 11 Pro）。
-          它只用来"选版本"，【不具备激活功能】——公开信息，不是机密，
-          所以放在明文 HTTP 提供的文件里没有泄露问题。
-          真正的激活仍然要靠 KMS / ADBA / 数字许可证。
+          你这张 ISO 的 install.wim 元数据（直接从镜像里读出来的）：
+              EDITIONID   = ProfessionalCountrySpecific
+              FLAGS       = ProfessionalCountrySpecific
+              NAME        = Windows 11 Pro China Only
+              DISPLAYNAME = Windows 11 专业中文版
+              BUILD       = 26200（Windows 11 25H2）
+              install.wim 里只有 1 个映像
 
-          ⚠️ 千万不要把真实的 MAK 零售密钥写在这里，那才是有泄露风险的。
+          关键：它的 EDITIONID 是 ProfessionalCountrySpecific，
+          而不是普通的 Professional。微软公开的那些 KMS 客户端通用密钥
+          （W269N-... 对应 Professional）【映射不到这个版本】，
+          所以填进去只会被拒 → 反而把「产品密钥」页顶出来。
 
-          常用户籍的通用密钥（想换版本就换这里的 Key）：
-            Windows 11 Pro          W269N-WFGWX-YVC9B-4J6C9-T83GX
-            Windows 11 Pro N        MH37W-N47XK-V7XM9-C7227-GCQG9
-            Windows 11 Home         YTMG3-N6DKC-DKB77-7M9GH-8HVX7
-            Windows 11 Enterprise   NPPR9-FWDCX-D2C8J-H872K-2YT43
-            Windows 11 Education    NW6C2-QMPVW-D7KKK-3GKT6-VCFB2
+          这个 China Only SKU 是 OEM 专供版本，本来就没有公开的通用/KMS 密钥：
+          它的密钥是烧在整机固件（ACPI 的 MSDM 表）里的，所以品牌机装 Windows
+          从来不问密钥——Setup 会自动从固件读取。
 
-          WillShowUI 取值：Always / OnError（默认）/ Never。
-          这里用 OnError：密钥正常时不弹页面；万一密钥被拒，会弹出密钥页
-          让你看到问题，而不是直接静默失败。
-          测试通过后想更彻底，可以改成 Never（任何情况下都不弹）。
+          因此：
+            * 真机（带 MSDM 的 OEM 机器）→ Setup 自动用固件里的密钥，不会弹密钥页 ✅
+            * Hyper-V / 无 MSDM 的机器   → 固件里没有密钥，Setup 会弹密钥页，
+                                            只能手点「我没有产品密钥」。
+                                            这是测试环境的固有限制，不是配置错误。
+
+          ⚠️ 如果哪天你换成了普通的多版本 Windows ISO（EDITIONID=Professional），
+             可以在这里加回通用密钥来跳过密钥页，例如：
+                <ProductKey>
+                  <Key>W269N-WFGWX-YVC9B-4J6C9-T83GX</Key>
+                  <WillShowUI>OnError</WillShowUI>
+                </ProductKey>
+             常用户籍的通用密钥：
+                Windows 11 Pro          W269N-WFGWX-YVC9B-4J6C9-T83GX
+                Windows 11 Pro N        MH37W-N47XK-V7XM9-C7227-GCQG9
+                Windows 11 Home         YTMG3-N6DKC-DKB77-7M9GH-8HVX7
+                Windows 11 Enterprise   NPPR9-FWDCX-D2C8J-H872K-2YT43
+                Windows 11 Education    NW6C2-QMPVW-D7KKK-3GKT6-VCFB2
+             （通用密钥只用来选版本，不具备激活功能，属于公开信息）
+
+          ⚠️ 千万不要把真实的 MAK/零售密钥写在这里——本文件由 iVentoy 通过明文
+             HTTP 提供，那才是真的会泄露。
         -->
-        <ProductKey>
-          <Key>W269N-WFGWX-YVC9B-4J6C9-T83GX</Key>
-          <WillShowUI>OnError</WillShowUI>
-        </ProductKey>
       </UserData>
     </component>
   </settings>
