@@ -7,6 +7,34 @@
 
 ---
 
+## 环境快照
+
+下表是**实测通过**的当前环境。换机器、换版本时请对照更新本表，省得以后排查时搞不清"当时到底是什么环境"。
+
+| 项 | 值 |
+|---|---|
+| iVentoy 版本 | **1.0.43**（Windows x64，**免费版**） |
+| 主程序 | `iVentoy_64.exe` |
+| 解压路径 | `C:\Users\cyk\Downloads\iventoy-1.0.43-win64-free\iventoy-1.0.43\` |
+| 管理界面 | `http://127.0.0.1:26000` |
+| HTTP 服务端口 | `16000`（客户端要能访问，用来传 ISO 内容） |
+| 自动安装脚本 | `<iVentoy>\user\scripts\unattend.xml` |
+| **当前上线镜像** | `zh-cn_windows_11_consumer_editions_version_25h2_updated_sep_2026_x64_dvd_cb71b7e8.iso`（9.12 GB，consumer 多版本） |
+| 目标版本 | Windows 11 Pro（`/IMAGE/NAME` = `Windows 11 Pro`；该镜像里是索引 4） |
+| 授权 | 免费版：**最多 20 个客户端、禁止商用**（见第 8 节） |
+
+### `iso\` 目录里的另外两个文件都不是本方案在用的
+
+| 文件 | 说明 |
+|---|---|
+| `Win11_25H2_Pro_Chinese_Simplified_x64_v2.iso` | **已弃用**。是 China Only 专供版（`EDITIONID=ProfessionalCountrySpecific`），既没有公开的通用密钥，`NAME` 也不是 `Windows 11 Pro`，正是当初卡住的根因。留档仅作参考 |
+| `FirPE-V1.9.2.iso` | PE 维护盘，与 Windows 无人值守无关 |
+
+> 版本建议：**1.0.43 或更新**。1.0.43 起"自动启动失败会回退到手动模式，页面不再整体退出"，
+> 且修掉了 wimboot 模式启动 Windows 时自动安装脚本不生效的 BUG。
+
+---
+
 ## 0. 方案总览
 
 整体思路：**iVentoy 负责把 ISO 送到机器上，`unattend.xml` 负责回答全部安装问题**。全程无人干预，装完停在桌面。
