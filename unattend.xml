@@ -313,33 +313,6 @@
       <RegisteredOwner>IT</RegisteredOwner>
       <TimeZone>China Standard Time</TimeZone>
     </component>
-
-    <!--
-      内置 Administrator 在 Windows 客户端 SKU 上默认是【禁用】状态。
-      下面 AdministratorPassword 只负责"设密码"，至于设密码是否顺带启用该账户，
-      属于各家文档说法不一的行为，所以这里在 specialize 阶段显式启用一次，
-      不依赖任何不确定行为。
-
-      specialize 在 oobeSystem 之前执行，所以等 OOBE 开始跑的时候，
-      这个账户已经是启用状态，OOBE 会直接以 Administrator 身份继续。
-
-      如果哪天你改回用自建账户，把整个 Microsoft-Windows-Deployment 组件删掉即可。
-    -->
-    <component name="Microsoft-Windows-Deployment"
-               processorArchitecture="amd64"
-               publicKeyToken="31bf3856ad364e35"
-               language="neutral"
-               versionScope="nonSxS"
-               xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State"
-               xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
-      <RunSynchronous>
-        <RunSynchronousCommand wcm:action="add">
-          <Description>启用内置 Administrator 账户</Description>
-          <Order>1</Order>
-          <Path>cmd /c net user Administrator /active:yes</Path>
-        </RunSynchronousCommand>
-      </RunSynchronous>
-    </component>
   </settings>
 
   <!-- ====================== 阶段 3：oobeSystem ========================= -->
@@ -367,9 +340,13 @@
 
       <!--
         LogonCount 是自动登录的次数，这里 1 次就够，因为装完没有会自动重启的后置脚本。
+        微软文档要求用 AutoLogon 时【必须】指定 LogonCount，所以不能省略。
+
+        Username 必须是 Administrator：这是微软指定的启用内置 Administrator 的方式，
+        见下面 UserAccounts 处的说明。
 
         以后如果加回"首次登录后跑脚本、脚本结尾会重启"的做法，
-        必须把它调到 2 以上（通常 3），否则第二次开机会停在锁屏，
+        必须把 LogonCount 调到 2 以上（通常 3），否则第二次开机会停在锁屏，
         后面的步骤永远不会执行。
       -->
       <AutoLogon>
@@ -396,9 +373,19 @@
       <!--
         直接用内置 Administrator，不再创建额外的本地账户。
 
-        AdministratorPassword 设置该账户的密码，同时（在大多数情况下）
-        让它成为唯一可用的管理员账户，OOBE 就不会再问"给这台电脑创建用户"。
-        账户的启用由上面 specialize 阶段的 Microsoft-Windows-Deployment 保证。
+        微软文档《AdministratorPassword》原文：
+          "By default, the built-in administrator account is disabled in all
+           default clean installations. You can enable the built-in
+           administrator account during unattended installations, by setting
+           the AutoLogon/Username to Administrator."
+        也就是说：下面 AdministratorPassword 只负责设密码，
+        【真正启用这个账户的是上面 AutoLogon 里的 Username=Administrator】。
+
+        不要再用 Microsoft-Windows-Deployment 去跑
+        "net user Administrator /active:yes"，那是多余动作；
+        同文档还警告显式启用内置 Administrator 可能让设备无法正常进入 OOBE。
+
+        另据《AutoLogon》文档：AutoLogon 会让 OOBE 跳过"创建用户"环节。
       -->
       <UserAccounts>
         <AdministratorPassword>

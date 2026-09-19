@@ -3,7 +3,7 @@
 针对你的环境选定：**UEFI/GPT 客户端 + Windows 11 + 已有第三方 DHCP + 全自动装机（不含后置自动化）**。
 
 > **当前范围说明**：现阶段只做「无人值守装完 Windows 11」，**不包含**改名 / 加域 / 装软件 / 推驱动。
-> 后置脚本已被移除，原因和加回方法见 [第 5.2 节「已知缺口」](#52-已知缺口现阶段没做的部分)。
+> 后置脚本已被移除，原因和加回方法见 [第 5.3 节「已知缺口」](#53-已知缺口现阶段没做的部分)。
 
 ---
 
@@ -49,7 +49,7 @@
 
 本仓库只有三个文件：`unattend.xml`（answer file）、`README.md`（本文档）、`.gitignore`。
 后置脚本 `deploy.ps1` 和注入负载 `VentoyAutoRun.bat` 已按你的要求删除，
-需要时可以从 git 历史里取回（见第 5.2 节）。
+需要时可以从 git 历史里取回（见第 5.3 节）。
 
 **命名铁律**（官方明确要求）：iVentoy 解压路径、`iso` 目录下的目录名和 ISO 文件名、脚本名，**都不能有中文或空格**。
 
@@ -236,7 +236,39 @@ dism /Get-WimInfo /WimFile:D:\sources\install.wim
 
 **擦盘保护**：`<WillWipeDisk>true</WillWipeDisk>` 不可逆。选盘为什么不写死 `DiskID=0`——多控制器服务器上枚举顺序和你以为的不一样，写死 0 很可能擦错盘。用"最接近 200GB"这种**按属性选**的方式，换固件、换控制器、换机型都不需要改 answer file。**首次测试请物理拔掉所有数据盘。**
 
-### 5.2 已知缺口（现阶段没做的部分）
+### 5.2 为什么直接用内置 Administrator（文档依据）
+
+本方案不创建自建账户，直接启用并使用内置 Administrator。这不是猜的，微软文档写得很明确：
+
+- **[AdministratorPassword](https://learn.microsoft.com/en-us/windows-hardware/customize/desktop/unattend/microsoft-windows-shell-setup-useraccounts-administratorpassword)**：
+  > "By default, the built-in administrator account is disabled in all default clean installations.
+  > You can enable the built-in administrator account during unattended installations,
+  > **by setting the AutoLogon/Username to Administrator**. This enables the built-in administrator
+  > account, even if a password is not specified in the AdministratorPassword setting."
+
+  即：**真正启用该账户的是 `AutoLogon` 的 `Username=Administrator`**，
+  `AdministratorPassword` 只负责设密码。两者分工不同，缺一不可。
+
+- **[AutoLogon](https://learn.microsoft.com/en-us/windows-hardware/customize/desktop/unattend/microsoft-windows-shell-setup-autologon)**：
+  > "In Windows 10, if you configure AutoLogon, the OS will **skip the user account creation phase during OOBE**."
+
+  这正是我们要的效果。同页还规定 **"LogonCount must be specified if AutoLogon is used"**，
+  所以 `LogonCount` 不能省。
+
+⚠️ **不要额外去显式启用内置 Administrator**。同一份文档警告：
+
+> "It is not necessary to explicitly enable the built-in Administrator account ... 
+> **Doing so can prevent the image or device from entering the Out-Of-Box Experience (OOBE) successfully.**"
+
+也就是说，**别再加 `net user Administrator /active:yes` 这类步骤**。本 answer file 曾经加过一条
+`Microsoft-Windows-Deployment` 的 `RunSynchronous` 做这件事，已按文档删除。
+
+⚠️ 还有一条**官方建议我们没有照做**，知悉即可：同一篇《AutoLogon》建议在这种场景下
+（用内置或既有账户自动登录）**再用 unattend 至少创建一个 Administrators 组成员账户**，
+以便自动登录结束后设备仍可管理。本方案没有自建账户——内置 Administrator 本身就是管理员，
+可管理性没问题，但这确实偏离了官方建议。想照做就把 `LocalAccounts` 块加回来。
+
+### 5.3 已知缺口（现阶段没做的部分）
 
 删掉后置脚本后，下面这些**不会自动完成**。装机前请确认你能接受：
 
@@ -298,7 +330,7 @@ iVentoy 通过 PXE 启动后，要在 WinPE 里用**网卡驱动**把服务器�
    </component>
    ```
 
-2. **打注入包**：注入负载的文件已从仓库删除，先取回来（见 5.2 节），
+2. **打注入包**：注入负载的文件已从仓库删除，先取回来（见 5.3 节），
    把 `VentoyAutoRun.bat` 和 `drivers\` 一起打包成**一个** `.7z`，
    在 `镜像管理` 里设为该 ISO 的**注入文件**。`drivers\` **即使为空也要留在压缩包里**——路径必须存在。
    - `VentoyAutoRun.bat` 会在 `winpeshl.exe` 之前自动执行：用 `drvload` + `pnputil` 把 `X:\drivers`
@@ -348,7 +380,7 @@ ipconfig /all
 | 自动登录生效 | 重启一次，应无需输密码直接进桌面 |
 | 中文注释没把 answer file 弄坏 | 装机过程中没有出现"无法分析或处理无人应答文件" |
 
-> 计算机名会是 `DESKTOP-XXXXXXX` 这类随机名——这是当前方案的预期行为，不是故障，详见 5.2 节。
+> 计算机名会是 `DESKTOP-XXXXXXX` 这类随机名——这是当前方案的预期行为，不是故障，详见 5.3 节。
 
 6. 单机跑通后，**再**逐步放开并发。注意免费版上限。
 
@@ -404,6 +436,7 @@ ipconfig /all
 | 装到错误的盘 / 擦错盘 | 别写死 `DiskID=0`；`_CLOSEST_`/`_MAX_SIZE` **不排除 USB 盘**，装机拔掉所有可移动存储；首次测试物理拔掉数据盘 |
 | 装完发现所有机器同名 | 不会发生：当前不设 `<ComputerName>`，Windows 会生成随机名。如果哪天你手动设了固定名，就会撞名 |
 | **装完停在锁屏，自动登录没生效** | 九成是 `AutoLogon` 与 `AdministratorPassword` 两处密码**不一致**（改密码时只改了一处）。这两处必须完全相同 |
+| OOBE 没走完 / 卡在 OOBE 或直接报错 | 检查是否有人额外加了 `net user Administrator /active:yes` 之类的显式启用步骤——微软文档说明这可能导致设备无法正常进入 OOBE。启用账户应当只靠 `AutoLogon` 的 `Username=Administrator` |
 | 报密码不符合密码策略 | `root123` 只有 7 位、仅小写字母+数字（2 类字符）。单机默认策略不要求复杂度，所以正常能过；但若环境里下发了复杂度策略，Setup 会在这里失败。届时改成大小写+数字+符号的组合 |
 | UEFI 启动 Windows 花屏 | 1.0.25 已修，用最新版；菜单里也可设分辨率 |
 | 安全启动过不去 | 见第 4 节三种模式；个别机型要先使能 BIOS 的 UEFI CA |
