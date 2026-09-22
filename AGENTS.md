@@ -65,7 +65,7 @@ iVentoy 无人值守部署 Windows 11 的**文档 + 配置仓库**：没有代�
 没有 CI。能在 shell 里自动查的只有格式类问题，改完请跑一遍：
 
 ```sh
-cd ~/dsh/dsh-iventoy
+cd ~/dsh-iventoy
 
 # 编码与行尾
 file unattend.xml user/deploy/tool_files.txt user/deploy/install-drivers.cmd
