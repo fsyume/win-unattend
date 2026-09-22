@@ -45,7 +45,6 @@ Drvceo_Win10_Win11_x64_Lite/libssl-1_1.dll
 Drvceo_Win10_Win11_x64_Lite/ssleay32.dll
 Drvceo_Win10_Win11_x64_Lite/start.bat
 OpenArk64.exe
-QiAnXing-Tianqing-10.7.0.2704.exe
 wiztree_4_33_portable/WizTree.exe
 wiztree_4_33_portable/WizTree3.ini
 wiztree_4_33_portable/WizTree64.exe
@@ -111,4 +110,3 @@ wiztree_4_33_portable/locale/zh_CHS/LC_MESSAGES/default.mo
 wiztree_4_33_portable/locale/zh_CHS/LC_MESSAGES/default.po
 wiztree_4_33_portable/locale/zh_CHT/LC_MESSAGES/default.mo
 wiztree_4_33_portable/locale/zh_CHT/LC_MESSAGES/default.po
-xGate_202606251807.exe
